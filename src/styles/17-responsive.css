@@ -1,0 +1,83 @@
+/* ---------- 响应式 ---------- */
+@media (max-width: 1460px) {
+  .layout {
+    grid-template-columns: 292px minmax(0, 1fr) 318px;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .nav-btn {
+    padding: 7px 11px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+  }
+
+  .ana-banner {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .ana-banner-stats {
+    margin-left: 0;
+  }
+
+  .ana-kpis {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .ana-span3,
+  .ana-span4,
+  .ana-span5 {
+    grid-column: span 6;
+  }
+
+  .ana-span8 {
+    grid-column: span 12;
+  }
+
+  .topo-node {
+    width: 170px;
+  }
+
+  .devices-mid {
+    grid-template-columns: 1fr;
+  }
+
+  .devices-bottom {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1200px) {
+  body {
+    overflow: auto;
+  }
+
+  .app {
+    height: auto;
+    min-height: 100%;
+  }
+
+  .layout {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .viewport {
+    grid-column: 1 / -1;
+    order: -1;
+    height: 62vh;
+  }
+
+  .main-nav {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 8px 14px;
+    gap: 10px;
+  }
+}

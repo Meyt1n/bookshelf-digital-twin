@@ -1,9 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
-import { AnalyticsPage } from './components/AnalyticsPage'
-import { BooksPage } from './components/BooksPage'
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { CommandDeck } from './components/CommandDeck'
 import { CompartmentPanel } from './components/CompartmentPanel'
-import { DevicesPage } from './components/DevicesPage'
 import { EventStream } from './components/EventStream'
 import { InventoryTabs } from './components/InventoryTabs'
 import { KpiStrip } from './components/KpiStrip'
@@ -13,9 +10,50 @@ import { TaskCard } from './components/TaskCard'
 import { TelemetryPanel } from './components/TelemetryPanel'
 import { TopBar } from './components/TopBar'
 import type { PageId } from './components/TopBar'
-import { CAMERA_PRESETS, cameraForTask, TwinScene } from './scene/TwinScene'
+import { ErrorBoundary } from './components/ui/ErrorBoundary'
+import { CAMERA_PRESETS, cameraForTask } from './scene/cameraPresets'
 import { useTwin } from './twin/useTwin'
 import type { TwinSnapshot } from './types'
+
+const TwinScene = lazy(() =>
+  import('./scene/TwinScene').then((m) => ({ default: m.TwinScene })),
+)
+const BooksPage = lazy(() =>
+  import('./components/BooksPage').then((m) => ({ default: m.BooksPage })),
+)
+const AnalyticsPage = lazy(() =>
+  import('./components/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })),
+)
+const DevicesPage = lazy(() =>
+  import('./components/DevicesPage').then((m) => ({ default: m.DevicesPage })),
+)
+
+function PageFallback({ label }: { label: string }) {
+  return (
+    <div className="page-fallback" role="status">
+      <div className="page-fallback-pulse" />
+      <span>{label}</span>
+    </div>
+  )
+}
+
+function PageGate({
+  children,
+  title,
+  hint,
+  loading,
+}: {
+  children: ReactNode
+  title: string
+  hint: string
+  loading: string
+}) {
+  return (
+    <ErrorBoundary title={title} hint={hint} fallbackClassName="error-boundary page-error">
+      <Suspense fallback={<PageFallback label={loading} />}>{children}</Suspense>
+    </ErrorBoundary>
+  )
+}
 
 function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
   const [resetToken, setResetToken] = useState(0)
@@ -41,7 +79,7 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
     if (idx < 0 || idx === presetIdxRef.current) return
     setPresetIdx(idx)
     setResetToken((t) => t + 1)
-  }, [followTask, snapshot.task?.action, snapshot.task?.id, snapshot.task?.phase])
+  }, [followTask, snapshot.task])
 
   useEffect(() => {
     if (!followTask) return
@@ -67,7 +105,22 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
       </aside>
 
       <main className="viewport">
-        <TwinScene snapshot={snapshot} presetIdx={presetIdx} resetToken={resetToken} cruise={cruise} />
+        <ErrorBoundary
+          title="3D 孪生场景加载失败"
+          hint="模型资源可能未就绪，可重试；持续失败请检查 public/model 下的 GLB。"
+          fallbackClassName="error-boundary viewport-error"
+        >
+          <Suspense
+            fallback={
+              <div className="scene-fallback" role="status">
+                <div className="scene-fallback-ring" />
+                <span>正在装载柜体与机构模型…</span>
+              </div>
+            }
+          >
+            <TwinScene snapshot={snapshot} presetIdx={presetIdx} resetToken={resetToken} cruise={cruise} />
+          </Suspense>
+        </ErrorBoundary>
         <div className="viewport-frame" />
         <div className="vertical-motto">格物致知 · 藏书于阁</div>
         <KpiStrip snapshot={snapshot} />
@@ -163,11 +216,25 @@ export default function App() {
 
   return (
     <div className="app">
-      <TopBar snapshot={snapshot} page={page} onNavigate={setPage} />
-      {page === 'overview' && <OverviewPage snapshot={snapshot} />}
-      {page === 'books' && <BooksPage snapshot={snapshot} onTaskStart={() => setPage('overview')} />}
-      {page === 'analytics' && <AnalyticsPage snapshot={snapshot} />}
-      {page === 'devices' && <DevicesPage snapshot={snapshot} />}
+      <TopBar page={page} onNavigate={setPage} />
+      <ErrorBoundary title="驾驶舱页面异常" hint="页面渲染出错，可重试或切换到其他页签。">
+        {page === 'overview' && <OverviewPage snapshot={snapshot} />}
+        {page === 'books' && (
+          <PageGate title="图书资产页异常" hint="可重试加载图书页。" loading="加载图书资产…">
+            <BooksPage snapshot={snapshot} onTaskStart={() => setPage('overview')} />
+          </PageGate>
+        )}
+        {page === 'analytics' && (
+          <PageGate title="数据分析页异常" hint="可重试加载分析页。" loading="加载数据分析…">
+            <AnalyticsPage snapshot={snapshot} />
+          </PageGate>
+        )}
+        {page === 'devices' && (
+          <PageGate title="设备诊断页异常" hint="可重试加载设备页。" loading="加载设备诊断…">
+            <DevicesPage snapshot={snapshot} />
+          </PageGate>
+        )}
+      </ErrorBoundary>
     </div>
   )
 }

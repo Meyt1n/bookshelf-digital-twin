@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { twinEngine } from '../twin/useTwin'
-import type { TwinSnapshot } from '../types'
+import { twinEngine, useTwinSelector } from '../twin/useTwin'
+import type { LinkState, TwinSnapshot } from '../types'
 
 export type PageId = 'overview' | 'books' | 'analytics' | 'devices'
 
@@ -33,13 +33,47 @@ const CLIMATE_SOURCE_TAGS: Record<string, string> = {
   fallback: '基准',
 }
 
+type TopBarSlice = {
+  mode: 'sim' | 'live'
+  liveHealthy: boolean
+  links: LinkState[]
+  temperature: number
+  humidity: number
+  climateSource: string
+}
+
+function selectTopBar(s: TwinSnapshot): TopBarSlice {
+  return {
+    mode: s.mode,
+    liveHealthy: s.liveHealthy,
+    links: s.links,
+    temperature: s.telemetry.temperature,
+    humidity: s.telemetry.humidity,
+    climateSource: s.telemetry.climateSource,
+  }
+}
+
+function topBarEqual(a: TopBarSlice, b: TopBarSlice): boolean {
+  return (
+    a.mode === b.mode &&
+    a.liveHealthy === b.liveHealthy &&
+    a.temperature === b.temperature &&
+    a.humidity === b.humidity &&
+    a.climateSource === b.climateSource &&
+    a.links === b.links
+  )
+}
+
 type TopBarProps = {
-  snapshot: TwinSnapshot
   page: PageId
   onNavigate: (page: PageId) => void
 }
 
-export function TopBar({ snapshot, page, onNavigate }: TopBarProps) {
+export function TopBar({ page, onNavigate }: TopBarProps) {
+  const { mode, liveHealthy, links, temperature, humidity, climateSource } = useTwinSelector(
+    selectTopBar,
+    topBarEqual,
+  )
   const [clock, setClock] = useState('')
   useEffect(() => {
     const update = () => {
@@ -52,16 +86,11 @@ export function TopBar({ snapshot, page, onNavigate }: TopBarProps) {
     return () => window.clearInterval(t)
   }, [])
 
-  const { mode, liveHealthy, telemetry } = snapshot
   const modeClass = mode === 'live' ? (liveHealthy ? 'mode-live' : 'mode-error') : 'mode-sim'
   const modeText = mode === 'live' ? (liveHealthy ? '已联机' : '联机异常') : '仿真运行'
-  const climateTag = CLIMATE_SOURCE_TAGS[telemetry.climateSource]
+  const climateTag = CLIMATE_SOURCE_TAGS[climateSource]
   const climateChipClass =
-    telemetry.climateSource === 'sensor'
-      ? 'climate-real'
-      : telemetry.climateSource === 'sim'
-        ? ''
-        : 'climate-est'
+    climateSource === 'sensor' ? 'climate-real' : climateSource === 'sim' ? '' : 'climate-est'
 
   return (
     <header className="topbar">
@@ -94,27 +123,27 @@ export function TopBar({ snapshot, page, onNavigate }: TopBarProps) {
           onClick={() => onNavigate('devices')}
           title="数据链路：驾驶舱 ↔ Flask ↔ Pi 桥接 ↔ STM32（点击查看设备诊断）"
         >
-          {snapshot.links.map((link) => (
+          {links.map((link) => (
             <span key={link.id} className={`link-dot ${LINK_DOT[link.status]}`} />
           ))}
           <em>链路</em>
         </button>
         <div
           className={`climate-chip ${climateChipClass}`}
-          title={`柜内环境遥测 · ${CLIMATE_SOURCE_LABELS[telemetry.climateSource] ?? telemetry.climateSource}`}
+          title={`柜内环境遥测 · ${CLIMATE_SOURCE_LABELS[climateSource] ?? climateSource}`}
         >
           <span className="climate-item">
             <i className="climate-ico temp" />
-            {telemetry.temperature.toFixed(1)}
+            {temperature.toFixed(1)}
             <em>°C</em>
           </span>
           <span className="climate-item">
             <i className="climate-ico hum" />
-            {Math.round(telemetry.humidity)}
+            {Math.round(humidity)}
             <em>%RH</em>
           </span>
           {climateTag ? (
-            <span className={`climate-live-tag ${telemetry.climateSource === 'sensor' ? '' : 'is-est'}`}>
+            <span className={`climate-live-tag ${climateSource === 'sensor' ? '' : 'is-est'}`}>
               {climateTag}
             </span>
           ) : null}

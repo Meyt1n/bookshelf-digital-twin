@@ -1,0 +1,347 @@
+/* ---------- 顶栏 ---------- */
+.topbar {
+  height: 60px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 20px;
+  background: linear-gradient(180deg, rgba(15, 18, 36, 0.85), rgba(9, 11, 24, 0.55));
+  backdrop-filter: blur(14px);
+  position: relative;
+}
+
+/* 顶栏底部彩虹细线 */
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(124, 140, 248, 0.55) 25%, rgba(34, 211, 238, 0.55) 50%, rgba(167, 139, 250, 0.55) 75%, transparent);
+  animation: rainbow-pan 8s linear infinite;
+  background-size: 200% 100%;
+}
+
+@keyframes rainbow-pan {
+  to {
+    background-position: 200% 0;
+  }
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 250px;
+}
+
+/* 发光晶体 */
+.brand-seal {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-num);
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--grad-main);
+  box-shadow:
+    0 4px 18px rgba(124, 140, 248, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  animation: crystal-breathe 4s ease-in-out infinite;
+}
+
+@keyframes crystal-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 4px 14px rgba(124, 140, 248, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  }
+  50% {
+    box-shadow:
+      0 4px 26px rgba(124, 140, 248, 0.65),
+      inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  }
+}
+
+.brand h1 {
+  font-size: 16.5px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+}
+
+.brand-sub {
+  display: block;
+  font-family: var(--font-num);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+/* 导航：胶囊滑块风 */
+.main-nav {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  background: rgba(13, 16, 33, 0.6);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px;
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.22, 0.8, 0.3, 1);
+  position: relative;
+}
+
+.nav-btn i {
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.nav-btn:hover {
+  color: var(--text);
+}
+
+.nav-btn.active {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(124, 140, 248, 0.85), rgba(94, 110, 228, 0.75) 55%, rgba(34, 180, 220, 0.7));
+  box-shadow:
+    0 4px 16px rgba(124, 140, 248, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+/* 顶栏右侧 */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.link-mini {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(13, 16, 33, 0.6);
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.link-mini:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 14px rgba(124, 140, 248, 0.18);
+}
+
+.link-mini em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 3px;
+  letter-spacing: 1.5px;
+}
+
+.link-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dot-ok {
+  background: var(--green);
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.9);
+}
+.dot-sim {
+  background: var(--indigo);
+  box-shadow: 0 0 8px rgba(124, 140, 248, 0.9);
+}
+.dot-bad {
+  background: var(--red);
+  box-shadow: 0 0 8px rgba(251, 113, 133, 0.9);
+  animation: blink 1s step-end infinite;
+}
+.dot-unknown {
+  background: var(--dim);
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.72);
+  }
+}
+
+.climate-chip {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 15px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(13, 16, 33, 0.6);
+}
+
+.climate-chip.climate-real {
+  border-color: rgba(52, 211, 153, 0.45);
+}
+
+.climate-chip.climate-est {
+  border-color: rgba(125, 162, 248, 0.45);
+}
+
+.climate-live-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.16);
+  color: #34d399;
+}
+
+.climate-live-tag.is-est {
+  background: rgba(125, 162, 248, 0.16);
+  color: #7da2f8;
+}
+
+.climate-item {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-family: var(--font-num);
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--cyan-bright);
+}
+
+.climate-item em {
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--dim);
+  letter-spacing: 0.5px;
+}
+
+.climate-ico {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  align-self: center;
+}
+
+.climate-ico.temp {
+  background: var(--cyan);
+  box-shadow: 0 0 6px var(--cyan);
+}
+
+.climate-ico.hum {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(13, 16, 33, 0.65);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.mode-btn:hover {
+  border-color: var(--indigo-bright);
+  box-shadow: 0 0 16px rgba(124, 140, 248, 0.3);
+}
+
+.mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.mode-sim .mode-dot {
+  background: var(--indigo);
+  box-shadow: 0 0 8px var(--indigo);
+}
+
+.mode-live {
+  border-color: rgba(52, 211, 153, 0.55);
+}
+
+.mode-live .mode-dot {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+}
+
+.mode-error {
+  border-color: rgba(251, 113, 133, 0.6);
+}
+
+.mode-error .mode-dot {
+  background: var(--red);
+  box-shadow: 0 0 8px var(--red);
+  animation: blink 1s step-end infinite;
+}
+
+.clock {
+  font-family: var(--font-num);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  background: var(--grad-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  min-width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+

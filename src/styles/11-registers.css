@@ -1,0 +1,95 @@
+/* ---------- 右栏：寄存器 ---------- */
+.reg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+}
+
+.reg-table td {
+  padding: 5.5px 4px;
+  border-bottom: 1px solid rgba(124, 140, 248, 0.09);
+  font-size: 11px;
+}
+
+.reg-table tr {
+  transition: background 0.2s;
+}
+
+.reg-table tr:hover {
+  background: rgba(124, 140, 248, 0.05);
+}
+
+.reg-table tr:last-child td {
+  border-bottom: none;
+}
+
+.reg-addr {
+  color: var(--dim);
+  width: 42px;
+}
+
+.reg-name {
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+
+.reg-value {
+  text-align: right;
+  width: 52px;
+}
+
+.reg-hex {
+  color: var(--cyan-bright);
+  font-weight: 600;
+}
+
+.reg-hex.flash {
+  animation: reg-flash 0.7s ease;
+}
+
+@keyframes reg-flash {
+  0% {
+    color: #ffffff;
+    text-shadow: 0 0 12px var(--cyan-bright);
+  }
+}
+
+.reg-extra {
+  text-align: right;
+  width: 74px;
+}
+
+.ack-chip {
+  font-size: 9px;
+  padding: 1.5px 8px;
+  border-radius: 999px;
+  letter-spacing: 1.5px;
+}
+
+.ack-chip.ok {
+  color: var(--green-bright);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+}
+
+.ack-chip.pending {
+  color: var(--amber-bright);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  animation: blink 0.8s step-end infinite;
+}
+
+.ack-chip.fault {
+  color: #fda4af;
+  border: 1px solid rgba(251, 113, 133, 0.55);
+}
+
+.ack-chip.warn {
+  color: #fdba74;
+  border: 1px solid rgba(253, 186, 116, 0.5);
+}
+
+.reg-note {
+  font-size: 9.5px;
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+

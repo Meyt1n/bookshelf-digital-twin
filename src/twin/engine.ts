@@ -56,6 +56,16 @@ import type {
   TwinEvent,
   TwinSnapshot,
 } from '../types'
+import {
+  isTaskAction,
+  parseBorrowLogsEnvelope,
+  parseClimateEnvelope,
+  parseLiveCompartments,
+  parseOkEnvelope,
+  parseStreamPayload,
+  type DeviceClimate,
+  type StreamPayload,
+} from './liveApi'
 
 const TICK_MS = 250
 const TELEMETRY_SAMPLE_MS = 2000
@@ -146,32 +156,6 @@ type SimBackup = {
   cellActivity: Record<number, number>
   storeCount: number
   takeCount: number
-}
-
-type DeviceBorrowLog = {
-  id: number
-  action: 'store' | 'take'
-  compartment_id: number | null
-  action_time: string | null
-  title: string | null
-  user_name: string | null
-}
-
-type DeviceClimate = {
-  temperature: number
-  humidity: number
-  source: string
-}
-
-/** /api/voice_stream 推送的事件载荷（语音对话 or borrow_logs 衍生的存取事件） */
-type StreamPayload = {
-  type?: string
-  role?: string
-  text?: string
-  source?: string
-  action?: string
-  title?: string
-  cid?: number | string
 }
 
 function rand(min: number, max: number): number {
@@ -1050,9 +1034,8 @@ export class TwinEngine {
       try {
         const res = await fetch(`${this.apiBase}/api/climate?t=${Date.now()}`, { cache: 'no-store' })
         if (!res.ok) return
-        const envelope = (await res.json()) as { ok: boolean; data?: DeviceClimate }
-        const climate = envelope.data
-        if (!climate || !Number.isFinite(climate.temperature) || !Number.isFinite(climate.humidity)) return
+        const climate = parseClimateEnvelope(await res.json())
+        if (!climate) return
         const first = this.liveClimate === null
         this.liveClimate = climate
         if (first) {
@@ -1082,8 +1065,7 @@ export class TwinEngine {
     try {
       const res = await fetch(`${this.apiBase}/api/borrow_logs?since_id=0&limit=500`)
       if (!res.ok) return
-      const envelope = (await res.json()) as { ok: boolean; data?: DeviceBorrowLog[] }
-      const logs = Array.isArray(envelope.data) ? envelope.data : []
+      const logs = parseBorrowLogsEnvelope(await res.json())
       if (this.mode !== 'live' || logs.length === 0) return
 
       const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -1164,12 +1146,8 @@ export class TwinEngine {
   }
 
   private handleStreamEvent(raw: string): void {
-    let data: StreamPayload
-    try {
-      data = JSON.parse(raw) as StreamPayload
-    } catch {
-      return
-    }
+    const data = parseStreamPayload(raw)
+    if (!data) return
 
     if (data.type === 'connected') {
       this.sseHealthy = true
@@ -1195,7 +1173,8 @@ export class TwinEngine {
 
   /** 实体存取事件直通：写事件流 + 驱动机械臂动画，再拉快照对账 */
   private handleShelfWatchEvent(data: StreamPayload): void {
-    const action = data.action as TaskAction
+    if (!isTaskAction(data.action)) return
+    const action = data.action
     const cid = Number(data.cid)
     const title = data.title || '未知图书'
 
@@ -1246,13 +1225,8 @@ export class TwinEngine {
       const res = await fetch(url, { signal: ctrl.signal })
       window.clearTimeout(timeout)
       if (!res.ok) throw new Error(String(res.status))
-      const data = (await res.json()) as Array<{
-        cid: number
-        x: number
-        y: number
-        status: string
-        book: string | null
-      }>
+      const data = parseLiveCompartments(await res.json())
+      if (!data) throw new Error('invalid compartments payload')
       this.liveLatency = Math.max(1, Math.round(performance.now() - started))
       const wasHealthy = this.liveHealthy
       this.liveHealthy = true
@@ -1329,18 +1303,13 @@ export class TwinEngine {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cid, title: book?.title ?? '' }),
       })
-      const prepareEnvelope = (await prepareRes.json()) as {
-        ok: boolean
-        message?: string
-        data?: { msg?: string; commit_request?: Record<string, unknown> }
-      }
-      const commitRequest = prepareEnvelope.data?.commit_request
-      if (!prepareEnvelope.ok || !commitRequest) {
-        this.pushEvent(
-          'take',
-          'warn',
-          `实体书架拒绝取书：${prepareEnvelope.message ?? prepareEnvelope.data?.msg ?? '未知原因'}`,
-        )
+      const prepareEnvelope = parseOkEnvelope(await prepareRes.json())
+      const commitRequest = prepareEnvelope?.data?.commit_request
+      if (!prepareEnvelope?.ok || !commitRequest || typeof commitRequest !== 'object') {
+        const msg =
+          prepareEnvelope?.message ??
+          (typeof prepareEnvelope?.data?.msg === 'string' ? prepareEnvelope.data.msg : undefined)
+        this.pushEvent('take', 'warn', `实体书架拒绝取书：${msg ?? '未知原因'}`)
         void this.pollLive(false)
         return
       }
@@ -1349,19 +1318,15 @@ export class TwinEngine {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(commitRequest),
       })
-      const commitEnvelope = (await commitRes.json()) as {
-        ok: boolean
-        message?: string
-        data?: { msg?: string }
-      }
-      if (commitEnvelope.ok) {
-        this.pushEvent('take', 'ok', `实体书架已完成取书：${commitEnvelope.data?.msg ?? 'ok'}`)
+      const commitEnvelope = parseOkEnvelope(await commitRes.json())
+      if (commitEnvelope?.ok) {
+        const okMsg = typeof commitEnvelope.data?.msg === 'string' ? commitEnvelope.data.msg : 'ok'
+        this.pushEvent('take', 'ok', `实体书架已完成取书：${okMsg}`)
       } else {
-        this.pushEvent(
-          'take',
-          'warn',
-          `实体书架取书提交失败：${commitEnvelope.message ?? commitEnvelope.data?.msg ?? '未知原因'}`,
-        )
+        const failMsg =
+          commitEnvelope?.message ??
+          (typeof commitEnvelope?.data?.msg === 'string' ? commitEnvelope.data.msg : undefined)
+        this.pushEvent('take', 'warn', `实体书架取书提交失败：${failMsg ?? '未知原因'}`)
       }
     } catch {
       this.pushEvent('take', 'warn', '联机取书请求失败 · 请检查 Flask 服务')

@@ -1,0 +1,152 @@
+/* ---------- 面板通用：玻璃 + 渐变描边 ---------- */
+.panel {
+  border: 1px solid transparent;
+  border-radius: 15px;
+  background:
+    linear-gradient(180deg, var(--panel-top), var(--panel-bottom)) padding-box,
+    linear-gradient(150deg, rgba(150, 168, 245, 0.34), rgba(150, 168, 245, 0.06) 34%, rgba(34, 211, 238, 0.05) 62%, rgba(167, 139, 250, 0.26)) border-box;
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 12px 38px rgba(3, 5, 14, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  padding: 13px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  position: relative;
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+  animation: panel-in 0.55s cubic-bezier(0.22, 0.9, 0.3, 1.08) backwards;
+  transition: box-shadow 0.35s, transform 0.35s;
+}
+
+.panel:hover {
+  box-shadow:
+    0 14px 44px rgba(3, 5, 14, 0.55),
+    0 0 0 1px rgba(150, 168, 245, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+}
+
+.col .panel:nth-child(2) {
+  animation-delay: 0.07s;
+}
+
+.col .panel:nth-child(3) {
+  animation-delay: 0.14s;
+}
+
+.col .panel:nth-child(4) {
+  animation-delay: 0.21s;
+}
+
+/* 面板顶部游走流光 */
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -35%;
+  width: 34%;
+  height: 1.5px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(165, 180, 255, 0.75), rgba(122, 231, 247, 0.6), transparent);
+  animation: shimmer-slide 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes shimmer-slide {
+  0%,
+  22% {
+    left: -35%;
+    opacity: 0;
+  }
+  32% {
+    opacity: 1;
+  }
+  58%,
+  100% {
+    left: 102%;
+    opacity: 0;
+  }
+}
+
+.col .panel:nth-child(2)::before {
+  animation-delay: 1.3s;
+}
+
+.col .panel:nth-child(3)::before {
+  animation-delay: 2.6s;
+}
+
+.col .panel:nth-child(4)::before {
+  animation-delay: 3.9s;
+}
+
+.panel-grow {
+  flex: 1;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-head h2 {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  color: var(--text);
+  position: relative;
+  padding-left: 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.panel-head h2::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--grad-main);
+  box-shadow: 0 0 10px rgba(124, 140, 248, 0.7);
+}
+
+.panel-sub {
+  font-family: var(--font-num);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 2.4px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.panel-hint {
+  font-family: var(--font-num);
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  color: var(--dim);
+}
+
+.panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+

@@ -1,0 +1,91 @@
+/* ---------- 应用骨架 ---------- */
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+}
+
+.layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 326px minmax(0, 1fr) 350px;
+  gap: 13px;
+  padding: 13px 15px 15px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  min-height: 0;
+}
+
+.error-boundary,
+.page-fallback,
+.scene-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  width: 100%;
+  color: var(--muted);
+}
+
+.error-boundary-card {
+  max-width: 420px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bottom));
+  border: 1px solid var(--line-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.error-boundary-detail {
+  font-size: 11px;
+  color: var(--amber);
+  word-break: break-word;
+}
+
+.page-fallback,
+.scene-fallback {
+  flex-direction: column;
+  gap: 12px;
+  letter-spacing: 0.04em;
+}
+
+.page-fallback-pulse,
+.scene-fallback-ring {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid rgba(124, 140, 248, 0.25);
+  border-top-color: var(--cyan);
+  animation: fallback-spin 0.9s linear infinite;
+}
+
+.viewport-error,
+.scene-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(7, 9, 21, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.page-error {
+  flex: 1;
+  min-height: 0;
+}
+
+@keyframes fallback-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
