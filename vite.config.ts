@@ -27,6 +27,10 @@ export default defineConfig({
           if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/')) {
             return 'react-vendor'
           }
+          if (id.includes('/src/scene/DeliveryCart') || id.includes('/src/scene/BookFlight')) {
+            return 'scene-cart'
+          }
+          if (id.includes('/src/scene/Laminator')) return 'scene-laminate'
           return undefined
         },
       },

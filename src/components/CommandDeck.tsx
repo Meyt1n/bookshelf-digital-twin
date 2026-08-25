@@ -1,14 +1,24 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PHASE_LABELS } from '../twin/engine'
+import { isDemoRunning, startDemoScript } from '../twin/demoScript'
 import { commandDeckEqual, selectCommandDeck } from '../twin/selectors'
 import { twinEngine, useTwinSelector } from '../twin/useTwin'
 
 export function CommandDeck() {
   const deck = useTwinSelector(selectCommandDeck, commandDeckEqual)
   const [takeText, setTakeText] = useState('')
-  const busy = deck.task !== null || deck.ocr !== null
+  const [demoOn, setDemoOn] = useState(false)
+  const busy = deck.task !== null || deck.ocr !== null || demoOn
   const live = deck.mode === 'live'
   const task = deck.task
+
+  useEffect(() => {
+    if (!demoOn) return
+    const id = window.setInterval(() => {
+      if (!isDemoRunning()) setDemoOn(false)
+    }, 400)
+    return () => window.clearInterval(id)
+  }, [demoOn])
 
   const submitTake = () => {
     const text = takeText.trim()
@@ -17,11 +27,19 @@ export function CommandDeck() {
     setTakeText('')
   }
 
+  const runDemo = () => {
+    if (live || busy) return
+    setDemoOn(true)
+    startDemoScript()
+  }
+
   const nowLabel = task
     ? `${task.action === 'store' ? '存书' : '取书'} · ${PHASE_LABELS[task.phase] ?? task.phase}`
     : deck.ocr
       ? '视觉识别中'
-      : null
+      : demoOn
+        ? '演示剧本执行中'
+        : null
 
   return (
     <div className={`command-deck ${busy ? 'is-busy' : ''}`}>
@@ -57,6 +75,16 @@ export function CommandDeck() {
           ⤓ 取书
         </button>
       </div>
+
+      <button
+        type="button"
+        className={`btn btn-cyan ${demoOn ? 'is-running' : ''}`}
+        disabled={busy || live}
+        title="一键跑存书→识别→入库→取书（答辩/录屏）"
+        onClick={runDemo}
+      >
+        ▶ 演示剧本
+      </button>
 
       <span className="deck-divider" />
 

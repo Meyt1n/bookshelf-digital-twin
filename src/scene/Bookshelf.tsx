@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { lazy, Suspense, useMemo, useRef } from 'react'
 import { useFrame, useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
 import { MeshoptGLTFLoader } from './loadGltf'
@@ -25,7 +25,9 @@ import {
   easeInOut,
   layerBottomY,
 } from './layout'
-import { Laminator } from './Laminator'
+
+const Laminator = lazy(() => import('./Laminator').then((m) => ({ default: m.Laminator })))
+
 
 /** 柜体各部件材质 */
 const BODY_MATERIALS: Record<string, THREE.MeshStandardMaterial> = {
@@ -730,7 +732,9 @@ export function Bookshelf({
 
       <ShelfSign />
       <UvEffect uv={uv} />
-      <Laminator laminate={laminate} inspect={inspect} />
+      <Suspense fallback={null}>
+        <Laminator laminate={laminate} inspect={inspect} />
+      </Suspense>
     </group>
   )
 }

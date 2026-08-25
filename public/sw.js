@@ -2,7 +2,7 @@ const CACHE = 'shelf-twin-v1'
 
 const PRECACHE = ['/', '/index.html']
 
-function isCacheableAsset(pathname: string): boolean {
+function isCacheableAsset(pathname) {
   if (pathname.startsWith('/api')) return false
   if (pathname === '/' || pathname === '/index.html') return true
   if (pathname.startsWith('/assets/')) return true

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { AlertBar } from './components/AlertBar'
 import { CommandDeck } from './components/CommandDeck'
 import { CompartmentPanel } from './components/CompartmentPanel'
 import { EventStream } from './components/EventStream'
@@ -7,6 +8,7 @@ import { KpiStrip } from './components/KpiStrip'
 import { ModulesPanel } from './components/ModulesPanel'
 import { RegisterPanel } from './components/RegisterPanel'
 import { TaskCard } from './components/TaskCard'
+import { TaskHistoryDrawer } from './components/TaskHistoryDrawer'
 import { TelemetryPanel } from './components/TelemetryPanel'
 import { TopBar } from './components/TopBar'
 import type { PageId } from './components/TopBar'
@@ -23,7 +25,7 @@ import {
   selectCameraFollow,
   selectHoverTip,
 } from './twin/selectors'
-import { useTwin, useTwinSelector } from './twin/useTwin'
+import { twinEngine, useTwin, useTwinSelector } from './twin/useTwin'
 
 const TwinScene = lazy(() =>
   import('./scene/TwinScene').then((m) => ({ default: m.TwinScene })),
@@ -102,6 +104,7 @@ function OverviewPage({
   const [cruise, setCruise] = useState(false)
   const [followTask, setFollowTask] = useState(true)
   const [docHidden, setDocHidden] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const presetIdxRef = useRef(presetIdx)
   presetIdxRef.current = presetIdx
 
@@ -117,6 +120,39 @@ function OverviewPage({
   useEffect(() => {
     if (!active || docHidden) setCruise(false)
   }, [active, docHidden])
+
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if ((e.target as HTMLElement | null)?.isContentEditable) return
+
+      if (e.code === 'Space') {
+        e.preventDefault()
+        twinEngine.commandEmergencyStop()
+        return
+      }
+      if (e.key === 'h' || e.key === 'H') {
+        setHistoryOpen((v) => !v)
+        return
+      }
+      const digit = e.code.match(/^Digit(\d)$/)
+      if (digit) {
+        const n = Number(digit[1])
+        const idx = n === 0 ? 9 : n - 1
+        if (idx >= 0 && idx < CAMERA_PRESETS.length) {
+          e.preventDefault()
+          setFollowTask(false)
+          setCruise(false)
+          setPresetIdx(idx)
+          setResetToken((t) => t + 1)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active])
 
   useEffect(() => {
     if (!followTask || !active) return
@@ -158,6 +194,7 @@ function OverviewPage({
       </aside>
 
       <main className="viewport">
+        <AlertBar onOpenHistory={() => setHistoryOpen(true)} />
         <ErrorBoundary
           title="3D 孪生场景加载失败"
           hint="模型资源可能未就绪，可重试；持续失败请检查 public/model 下的 GLB。"
@@ -186,6 +223,7 @@ function OverviewPage({
         <div className="vertical-motto">格物致知 · 藏书于阁</div>
         <KpiStrip />
         <TaskCard />
+        <TaskHistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
         {hover.hoveredCid !== null && hover.floor !== null && hover.cell !== null && (
           <div className="hover-tip">
             <b>
@@ -239,15 +277,23 @@ function OverviewPage({
             >
               复位
             </button>
+            <button
+              type="button"
+              className={`view-tool-btn ${historyOpen ? 'active' : ''}`}
+              onClick={() => setHistoryOpen((v) => !v)}
+              title="任务回放（快捷键 H）"
+            >
+              回放
+            </button>
           </div>
-          <div className="cam-presets">
+          <div className="cam-presets" role="toolbar" aria-label="机位预设，数字键 1-0 切换">
             {CAMERA_PRESETS.map((preset, i) => (
               <button
                 key={preset.id}
                 type="button"
                 className={`view-tool-btn ${presetIdx === i ? 'active' : ''}`}
                 onClick={() => applyPreset(i)}
-                title={`切换到${preset.label}视角`}
+                title={`切换到${preset.label}视角（快捷键 ${i === 9 ? 0 : i + 1}）`}
               >
                 {preset.label}
               </button>

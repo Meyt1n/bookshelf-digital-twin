@@ -72,7 +72,6 @@ function findOccupiedCid(): number | null {
  */
 export function startDemoScript(): () => void {
   if (twinEngine.getSnapshot().mode === 'live') {
-    twinEngine.commandCaptureStore()
     return () => {}
   }
   if (demoRunning) return () => {}

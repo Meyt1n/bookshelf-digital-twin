@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useRef } from 'react'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
@@ -7,13 +7,18 @@ import { twinEngine } from '../twin/engine'
 import { sceneEqual, selectScene } from '../twin/selectors'
 import { useTwinSelector } from '../twin/useTwin'
 import { BayCamera } from './BayCamera'
-import { BookFlightMesh } from './BookFlight'
 import { Bookshelf } from './Bookshelf'
 import { CAMERA_PRESETS } from './cameraPresets'
-import { DeliveryCart } from './DeliveryCart'
 import { Environment3D } from './Environment3D'
 import { Gantry } from './Gantry'
 import { TransferBay } from './TransferBay'
+
+const DeliveryCart = lazy(() =>
+  import('./DeliveryCart').then((m) => ({ default: m.DeliveryCart })),
+)
+const BookFlightMesh = lazy(() =>
+  import('./BookFlight').then((m) => ({ default: m.BookFlightMesh })),
+)
 
 const STAGE_LABELS = ['柜体 1/4', '龙门机构 2/4', '送书车 3/4', '就绪 4/4'] as const
 
@@ -129,7 +134,7 @@ export function TwinScene({ active, profile, presetIdx, resetToken, cruise }: Tw
         dpr={[1, profile.dprMax]}
         frameloop={active ? 'always' : 'never'}
         camera={{ fov: 42, position: CAMERA_PRESETS[0].pos, near: 0.08, far: 80 }}
-        gl={{ antialias: profile.antialias, powerPreference: 'high-performance' }}
+        gl={{ antialias: profile.antialias, powerPreference: 'high-performance', preserveDrawingBuffer: true }}
         onPointerMissed={() => twinEngine.setSelected(null)}
         style={{ opacity: loading && stage === 0 ? 0.35 : 1, transition: 'opacity 280ms ease' }}
       >

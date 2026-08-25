@@ -2,6 +2,7 @@ import { PHASE_LABELS, taskFlow } from '../twin/engine'
 import { selectTaskCard, taskCardEqual } from '../twin/selectors'
 import { useTwinSelector } from '../twin/useTwin'
 
+/** 横向相位时间轴 HUD（替代密集相位点） */
 export function TaskCard() {
   const { task, ocr, ocrTitle } = useTwinSelector(selectTaskCard, taskCardEqual)
   if (!task && !ocr) return null
@@ -49,19 +50,20 @@ export function TaskCard() {
         <span className="phase-now-label">{isFault ? '状态' : '当前阶段'}</span>
         <strong>{PHASE_LABELS[task.phase] ?? task.phase}</strong>
       </div>
-      <div className="phase-flow">
+      <ol className="phase-timeline" aria-label="作业相位时间轴">
         {flow.map((phase, i) => {
-          let cls = 'phase-step'
+          let cls = 'timeline-step'
           if (isFault) cls += ' fault'
           else if (i < activeIdx || task.phase === 'done') cls += ' done'
           else if (i === activeIdx) cls += ' active'
           return (
-            <span key={phase} className={cls} title={PHASE_LABELS[phase]}>
+            <li key={phase} className={cls} title={PHASE_LABELS[phase]}>
               <i />
-            </span>
+              <span>{PHASE_LABELS[phase] ?? phase}</span>
+            </li>
           )
         })}
-      </div>
+      </ol>
       <div className="task-progress">
         <span style={{ width: `${pct}%` }} />
       </div>

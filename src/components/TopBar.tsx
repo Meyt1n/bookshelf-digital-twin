@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { twinEngine, useTwinSelector } from '../twin/useTwin'
 import type { LinkState, TwinSnapshot } from '../types'
+import { captureViewportPng, exportKpiJson, recordViewportBrief } from '../ui/exportShare'
+import { cycleTheme, getTheme, type ThemeId } from '../ui/theme'
 
 export type PageId = 'overview' | 'books' | 'analytics' | 'devices'
 
@@ -10,6 +12,12 @@ const NAV_ITEMS: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'analytics', label: '数据分析', icon: '∿' },
   { id: 'devices', label: '设备诊断', icon: '⚙' },
 ]
+
+const THEME_LABEL: Record<ThemeId, string> = {
+  aurora: '极光',
+  contrast: '高对比',
+  venue: '展厅',
+}
 
 const LINK_DOT: Record<string, string> = {
   online: 'dot-ok',
@@ -75,6 +83,9 @@ export function TopBar({ page, onNavigate }: TopBarProps) {
     topBarEqual,
   )
   const [clock, setClock] = useState('')
+  const [theme, setTheme] = useState<ThemeId>(() => getTheme())
+  const [exportHint, setExportHint] = useState('')
+
   useEffect(() => {
     const update = () => {
       const d = new Date()
@@ -102,7 +113,7 @@ export function TopBar({ page, onNavigate }: TopBarProps) {
         </div>
       </div>
 
-      <nav className="main-nav">
+      <nav className="main-nav" aria-label="主导航">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.id}
@@ -147,6 +158,53 @@ export function TopBar({ page, onNavigate }: TopBarProps) {
               {climateTag}
             </span>
           ) : null}
+        </div>
+        <button
+          type="button"
+          className="theme-btn"
+          title="切换主题：极光 / 演示高对比 / 展厅暗光"
+          onClick={() => setTheme(cycleTheme())}
+        >
+          {THEME_LABEL[theme]}
+        </button>
+        <div className="export-group">
+          <button
+            type="button"
+            className="theme-btn"
+            title="导出今日 KPI JSON"
+            onClick={() => {
+              exportKpiJson(twinEngine.getSnapshot())
+              setExportHint('KPI')
+              window.setTimeout(() => setExportHint(''), 1200)
+            }}
+          >
+            KPI
+          </button>
+          <button
+            type="button"
+            className="theme-btn"
+            title="截取 3D 视口"
+            onClick={() => {
+              setExportHint(captureViewportPng() ? '截图' : '失败')
+              window.setTimeout(() => setExportHint(''), 1200)
+            }}
+          >
+            截图
+          </button>
+          <button
+            type="button"
+            className="theme-btn"
+            title="短录屏约 4 秒"
+            onClick={() => {
+              void recordViewportBrief(4000).then((r) => {
+                setExportHint(r === 'fail' ? '失败' : r === 'webm' ? '录屏' : '截图')
+                window.setTimeout(() => setExportHint(''), 1200)
+              })
+            }}
+          >
+            录屏
+          </button>
+          {exportHint ? <em className="export-hint">{exportHint}</em> : null}
         </div>
         <button
           type="button"
