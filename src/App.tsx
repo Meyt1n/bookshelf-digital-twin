@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { CommandDeck } from './components/CommandDeck'
 import { CompartmentPanel } from './components/CompartmentPanel'
 import { EventStream } from './components/EventStream'
@@ -11,9 +11,19 @@ import { TelemetryPanel } from './components/TelemetryPanel'
 import { TopBar } from './components/TopBar'
 import type { PageId } from './components/TopBar'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
+import {
+  applyDocumentPerfClass,
+  buildGraphicsProfile,
+  type GraphicsProfile,
+} from './graphics/perfTier'
 import { CAMERA_PRESETS, cameraForTask } from './scene/cameraPresets'
-import { useTwin } from './twin/useTwin'
-import type { TwinSnapshot } from './types'
+import {
+  cameraFollowEqual,
+  hoverTipEqual,
+  selectCameraFollow,
+  selectHoverTip,
+} from './twin/selectors'
+import { useTwin, useTwinSelector } from './twin/useTwin'
 
 const TwinScene = lazy(() =>
   import('./scene/TwinScene').then((m) => ({ default: m.TwinScene })),
@@ -28,11 +38,17 @@ const DevicesPage = lazy(() =>
   import('./components/DevicesPage').then((m) => ({ default: m.DevicesPage })),
 )
 
-function PageFallback({ label }: { label: string }) {
+type DrawerId = 'left' | 'right' | null
+
+function PageSkeleton({ variant }: { variant: 'books' | 'analytics' | 'devices' }) {
   return (
-    <div className="page-fallback" role="status">
-      <div className="page-fallback-pulse" />
-      <span>{label}</span>
+    <div className={`page-skeleton sk-${variant}`} role="status" aria-label="页面加载中">
+      <div className="sk-banner" />
+      <div className="sk-grid">
+        {Array.from({ length: variant === 'analytics' ? 6 : 4 }).map((_, i) => (
+          <div key={i} className="sk-card" />
+        ))}
+      </div>
     </div>
   )
 }
@@ -41,54 +57,86 @@ function PageGate({
   children,
   title,
   hint,
-  loading,
+  skeleton,
 }: {
   children: ReactNode
   title: string
   hint: string
-  loading: string
+  skeleton: ReactNode
 }) {
   return (
     <ErrorBoundary title={title} hint={hint} fallbackClassName="error-boundary page-error">
-      <Suspense fallback={<PageFallback label={loading} />}>{children}</Suspense>
+      <Suspense fallback={skeleton}>{children}</Suspense>
     </ErrorBoundary>
   )
 }
 
-function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
+function BooksRoute({ onTaskStart }: { onTaskStart: () => void }) {
+  const snapshot = useTwin()
+  return <BooksPage snapshot={snapshot} onTaskStart={onTaskStart} />
+}
+
+function AnalyticsRoute() {
+  const snapshot = useTwin()
+  return <AnalyticsPage snapshot={snapshot} />
+}
+
+function DevicesRoute() {
+  const snapshot = useTwin()
+  return <DevicesPage snapshot={snapshot} />
+}
+
+function OverviewPage({
+  active,
+  profile,
+  drawer,
+  onDrawer,
+}: {
+  active: boolean
+  profile: GraphicsProfile
+  drawer: DrawerId
+  onDrawer: (id: DrawerId) => void
+}) {
   const [resetToken, setResetToken] = useState(0)
   const [presetIdx, setPresetIdx] = useState(0)
   const [cruise, setCruise] = useState(false)
   const [followTask, setFollowTask] = useState(true)
+  const [docHidden, setDocHidden] = useState(false)
   const presetIdxRef = useRef(presetIdx)
   presetIdxRef.current = presetIdx
 
-  const hovered =
-    snapshot.hoveredCid !== null
-      ? snapshot.compartments.find((c) => c.cid === snapshot.hoveredCid)
-      : null
-  const hoveredBook =
-    hovered && hovered.bookId !== null ? snapshot.booksById[hovered.bookId] : null
+  const hover = useTwinSelector(selectHoverTip, hoverTipEqual)
+  const follow = useTwinSelector(selectCameraFollow, cameraFollowEqual)
 
   useEffect(() => {
-    if (!followTask) return
-    const task = snapshot.task
-    if (!task || task.phase === 'done' || task.phase === 'fault') return
-    const id = cameraForTask(task.action, task.phase)
+    const onVis = () => setDocHidden(document.hidden)
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [])
+
+  useEffect(() => {
+    if (!active || docHidden) setCruise(false)
+  }, [active, docHidden])
+
+  useEffect(() => {
+    if (!followTask || !active) return
+    if (!follow.taskAction || !follow.taskPhase) return
+    if (follow.taskPhase === 'done' || follow.taskPhase === 'fault') return
+    const id = cameraForTask(follow.taskAction, follow.taskPhase)
     const idx = CAMERA_PRESETS.findIndex((p) => p.id === id)
     if (idx < 0 || idx === presetIdxRef.current) return
     setPresetIdx(idx)
     setResetToken((t) => t + 1)
-  }, [followTask, snapshot.task])
+  }, [followTask, active, follow.taskAction, follow.taskPhase, follow.taskId])
 
   useEffect(() => {
-    if (!followTask) return
-    if (snapshot.modules.laminate.status !== 'running') return
+    if (!followTask || !active) return
+    if (!follow.laminateRunning) return
     const idx = CAMERA_PRESETS.findIndex((p) => p.id === 'laminate')
     if (idx < 0 || idx === presetIdxRef.current) return
     setPresetIdx(idx)
     setResetToken((t) => t + 1)
-  }, [followTask, snapshot.modules.laminate.status])
+  }, [followTask, active, follow.laminateRunning])
 
   const applyPreset = (idx: number) => {
     setFollowTask(false)
@@ -97,9 +145,14 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
     setResetToken((t) => t + 1)
   }
 
+  const sceneActive = active && !docHidden
+  const effectiveCruise = cruise && sceneActive && profile.envAnimate
+
   return (
-    <div className="layout">
-      <aside className="col col-left">
+    <div
+      className={`layout ${drawer === 'left' ? 'drawer-left' : ''} ${drawer === 'right' ? 'drawer-right' : ''}`}
+    >
+      <aside className={`col col-left ${drawer === 'left' ? 'is-open' : ''}`}>
         <CompartmentPanel />
         <InventoryTabs />
       </aside>
@@ -113,26 +166,34 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
           <Suspense
             fallback={
               <div className="scene-fallback" role="status">
-                <div className="scene-fallback-ring" />
-                <span>正在装载柜体与机构模型…</span>
+                <div className="scene-load-bar">
+                  <i style={{ width: '18%' }} />
+                </div>
+                <span>正在装载柜体模型…</span>
               </div>
             }
           >
-            <TwinScene snapshot={snapshot} presetIdx={presetIdx} resetToken={resetToken} cruise={cruise} />
+            <TwinScene
+              active={sceneActive}
+              profile={profile}
+              presetIdx={presetIdx}
+              resetToken={resetToken}
+              cruise={effectiveCruise}
+            />
           </Suspense>
         </ErrorBoundary>
         <div className="viewport-frame" />
         <div className="vertical-motto">格物致知 · 藏书于阁</div>
         <KpiStrip />
         <TaskCard />
-        {hovered && (
+        {hover.hoveredCid !== null && hover.floor !== null && hover.cell !== null && (
           <div className="hover-tip">
             <b>
-              {hovered.floor} 层 {hovered.cell} 号格
+              {hover.floor} 层 {hover.cell} 号格
             </b>
-            {hoveredBook ? (
+            {hover.title ? (
               <span>
-                《{hoveredBook.title}》 · {hoveredBook.author}
+                《{hover.title}》 · {hover.author}
               </span>
             ) : (
               <span className="c-dim">空闲 · 点击查看详情</span>
@@ -158,6 +219,7 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
             <button
               type="button"
               className={`view-tool-btn ${cruise ? 'active' : ''}`}
+              disabled={!profile.envAnimate}
               onClick={() => {
                 setCruise((v) => {
                   const next = !v
@@ -198,40 +260,133 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
           )}
         </div>
         <CommandDeck />
+        <div className="mobile-dock" role="toolbar" aria-label="面板切换">
+          <button
+            type="button"
+            className={`dock-btn ${drawer === 'left' ? 'active' : ''}`}
+            onClick={() => onDrawer(drawer === 'left' ? null : 'left')}
+          >
+            格口
+          </button>
+          <button
+            type="button"
+            className={`dock-btn ${drawer === null ? 'active' : ''}`}
+            onClick={() => onDrawer(null)}
+          >
+            3D
+          </button>
+          <button
+            type="button"
+            className={`dock-btn ${drawer === 'right' ? 'active' : ''}`}
+            onClick={() => onDrawer(drawer === 'right' ? null : 'right')}
+          >
+            遥测
+          </button>
+        </div>
       </main>
 
-      <aside className="col col-right">
+      <aside className={`col col-right ${drawer === 'right' ? 'is-open' : ''}`}>
         <TelemetryPanel />
         <ModulesPanel />
         <RegisterPanel />
         <EventStream />
       </aside>
+
+      {drawer !== null && (
+        <button type="button" className="drawer-scrim" aria-label="关闭面板" onClick={() => onDrawer(null)} />
+      )}
     </div>
   )
 }
 
 export default function App() {
-  const snapshot = useTwin()
   const [page, setPage] = useState<PageId>('overview')
+  const [drawer, setDrawer] = useState<DrawerId>(null)
+  const [bootPhase, setBootPhase] = useState(0)
+  const profile = useMemo(() => {
+    const p = buildGraphicsProfile()
+    applyDocumentPerfClass(p)
+    return p
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const run = () => {
+      if (!cancelled) void import('./scene/TwinScene')
+    }
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(run)
+      return () => {
+        cancelled = true
+        window.cancelIdleCallback?.(id)
+      }
+    }
+    const id = window.setTimeout(run, 400)
+    return () => {
+      cancelled = true
+      window.clearTimeout(id)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (profile.reducedMotion) {
+      setBootPhase(3)
+      return
+    }
+    const t1 = window.setTimeout(() => setBootPhase(1), 40)
+    const t2 = window.setTimeout(() => setBootPhase(2), 220)
+    const t3 = window.setTimeout(() => setBootPhase(3), 480)
+    return () => {
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+      window.clearTimeout(t3)
+    }
+  }, [profile.reducedMotion])
+
+  useEffect(() => {
+    setDrawer(null)
+  }, [page])
 
   return (
-    <div className="app">
+    <div className={`app boot-${bootPhase}`}>
       <TopBar page={page} onNavigate={setPage} />
       <ErrorBoundary title="驾驶舱页面异常" hint="页面渲染出错，可重试或切换到其他页签。">
-        {page === 'overview' && <OverviewPage snapshot={snapshot} />}
+        <div
+          className={`page-layer ${page === 'overview' ? 'is-active' : 'is-parked'}`}
+          aria-hidden={page !== 'overview'}
+        >
+          <OverviewPage
+            active={page === 'overview'}
+            profile={profile}
+            drawer={drawer}
+            onDrawer={setDrawer}
+          />
+        </div>
         {page === 'books' && (
-          <PageGate title="图书资产页异常" hint="可重试加载图书页。" loading="加载图书资产…">
-            <BooksPage snapshot={snapshot} onTaskStart={() => setPage('overview')} />
+          <PageGate
+            title="图书资产页异常"
+            hint="可重试加载图书页。"
+            skeleton={<PageSkeleton variant="books" />}
+          >
+            <BooksRoute onTaskStart={() => setPage('overview')} />
           </PageGate>
         )}
         {page === 'analytics' && (
-          <PageGate title="数据分析页异常" hint="可重试加载分析页。" loading="加载数据分析…">
-            <AnalyticsPage snapshot={snapshot} />
+          <PageGate
+            title="数据分析页异常"
+            hint="可重试加载分析页。"
+            skeleton={<PageSkeleton variant="analytics" />}
+          >
+            <AnalyticsRoute />
           </PageGate>
         )}
         {page === 'devices' && (
-          <PageGate title="设备诊断页异常" hint="可重试加载设备页。" loading="加载设备诊断…">
-            <DevicesPage snapshot={snapshot} />
+          <PageGate
+            title="设备诊断页异常"
+            hint="可重试加载设备页。"
+            skeleton={<PageSkeleton variant="devices" />}
+          >
+            <DevicesRoute />
           </PageGate>
         )}
       </ErrorBoundary>

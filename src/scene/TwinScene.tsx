@@ -1,9 +1,11 @@
-import { Suspense } from 'react'
+import { Suspense, useEffect, useState, type ReactNode } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import type { GraphicsProfile } from '../graphics/perfTier'
 import { twinEngine } from '../twin/engine'
-import type { TwinSnapshot } from '../types'
+import { sceneEqual, selectScene } from '../twin/selectors'
+import { useTwinSelector } from '../twin/useTwin'
 import { BayCamera } from './BayCamera'
 import { BookFlightMesh } from './BookFlight'
 import { Bookshelf } from './Bookshelf'
@@ -13,7 +15,19 @@ import { Environment3D } from './Environment3D'
 import { Gantry } from './Gantry'
 import { TransferBay } from './TransferBay'
 
-function CameraRig({ presetIdx, resetToken, cruise }: { presetIdx: number; resetToken: number; cruise: boolean }) {
+const STAGE_LABELS = ['柜体 1/4', '龙门机构 2/4', '送书车 3/4', '就绪 4/4'] as const
+
+function CameraRig({
+  presetIdx,
+  resetToken,
+  cruise,
+  enabled,
+}: {
+  presetIdx: number
+  resetToken: number
+  cruise: boolean
+  enabled: boolean
+}) {
   const { camera, gl } = useThree()
   const controlsRef = useRef<OrbitControls | null>(null)
 
@@ -39,64 +53,111 @@ function CameraRig({ presetIdx, resetToken, cruise }: { presetIdx: number; reset
   }, [camera, presetIdx, resetToken])
 
   useEffect(() => {
-    if (controlsRef.current) controlsRef.current.autoRotate = cruise
-  }, [cruise])
+    if (controlsRef.current) controlsRef.current.autoRotate = cruise && enabled
+  }, [cruise, enabled])
 
-  useFrame(() => controlsRef.current?.update())
+  useFrame(() => {
+    if (!enabled) return
+    controlsRef.current?.update()
+  })
   return null
 }
 
-function SceneLoadingFallback() {
+function StageReady({ stage, onReady }: { stage: number; onReady: (stage: number) => void }) {
+  useEffect(() => {
+    onReady(stage)
+  }, [stage, onReady])
+  return null
+}
+
+function StagedModels({
+  inspectRobot,
+  onStage,
+  childrenCabinet,
+}: {
+  inspectRobot: boolean
+  onStage: (stage: number) => void
+  childrenCabinet: ReactNode
+}) {
   return (
-    <mesh position={[0, 1.1, 0]}>
-      <boxGeometry args={[0.35, 0.35, 0.35]} />
-      <meshStandardMaterial color="#7c8cf8" emissive="#22d3ee" emissiveIntensity={0.35} wireframe />
-    </mesh>
+    <Suspense fallback={null}>
+      {childrenCabinet}
+      <StageReady stage={1} onReady={onStage} />
+      <Suspense fallback={null}>
+        <Gantry />
+        <TransferBay />
+        <BayCamera />
+        <StageReady stage={2} onReady={onStage} />
+        <Suspense fallback={null}>
+          <DeliveryCart inspect={inspectRobot} />
+          <BookFlightMesh />
+          <StageReady stage={3} onReady={onStage} />
+        </Suspense>
+      </Suspense>
+    </Suspense>
   )
 }
 
 type TwinSceneProps = {
-  snapshot: TwinSnapshot
+  active: boolean
+  profile: GraphicsProfile
   presetIdx: number
   resetToken: number
   cruise: boolean
 }
 
-export function TwinScene({ snapshot, presetIdx, resetToken, cruise }: TwinSceneProps) {
+export function TwinScene({ active, profile, presetIdx, resetToken, cruise }: TwinSceneProps) {
+  const scene = useTwinSelector(selectScene, sceneEqual)
+  const [stage, setStage] = useState(0)
   const preset = CAMERA_PRESETS[presetIdx] ?? CAMERA_PRESETS[0]
   const inspectCabinet = preset.id === 'cabinet' || preset.id === 'robot' || preset.id === 'laminate'
   const inspectRobot = preset.id === 'robot'
-  const isCoarse =
-    typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
+  const loading = stage < 3
+  const progressPct = Math.min(100, ((stage + 1) / 4) * 100)
 
   return (
-    <Canvas
-      dpr={isCoarse ? [1, 1.25] : [1, 1.75]}
-      camera={{ fov: 42, position: CAMERA_PRESETS[0].pos, near: 0.08, far: 80 }}
-      gl={{ antialias: !isCoarse, powerPreference: 'high-performance' }}
-      onPointerMissed={() => twinEngine.setSelected(null)}
-    >
-      <color attach="background" args={['#070915']} />
-      <fog attach="fog" args={['#070915', 9, 26]} />
-      <CameraRig presetIdx={presetIdx} resetToken={resetToken} cruise={cruise} />
-      <Environment3D />
-      <Suspense fallback={<SceneLoadingFallback />}>
-        <Bookshelf
-          compartments={snapshot.compartments}
-          booksById={snapshot.booksById}
-          selectedCid={snapshot.selectedCid}
-          hoveredCid={snapshot.hoveredCid}
-          task={snapshot.task}
-          uv={snapshot.modules.uv}
-          laminate={snapshot.modules.laminate}
-          inspect={inspectCabinet}
+    <div className="twin-scene-root">
+      {loading && (
+        <div className="scene-fallback scene-progress" role="status">
+          <div className="scene-load-bar">
+            <i style={{ width: `${progressPct}%` }} />
+          </div>
+          <span>{STAGE_LABELS[Math.min(stage, 3)]}</span>
+        </div>
+      )}
+      <Canvas
+        dpr={[1, profile.dprMax]}
+        frameloop={active ? 'always' : 'never'}
+        camera={{ fov: 42, position: CAMERA_PRESETS[0].pos, near: 0.08, far: 80 }}
+        gl={{ antialias: profile.antialias, powerPreference: 'high-performance' }}
+        onPointerMissed={() => twinEngine.setSelected(null)}
+        style={{ opacity: loading && stage === 0 ? 0.35 : 1, transition: 'opacity 280ms ease' }}
+      >
+        <color attach="background" args={['#070915']} />
+        <fog attach="fog" args={['#070915', 9, 26]} />
+        <CameraRig presetIdx={presetIdx} resetToken={resetToken} cruise={cruise} enabled={active} />
+        <Environment3D
+          animate={active && profile.envAnimate}
+          starDust={profile.starDust}
+          starCount={profile.starCount}
         />
-        <Gantry />
-        <TransferBay />
-        <BayCamera />
-        <DeliveryCart inspect={inspectRobot} />
-        <BookFlightMesh />
-      </Suspense>
-    </Canvas>
+        <StagedModels
+          inspectRobot={inspectRobot}
+          onStage={setStage}
+          childrenCabinet={
+            <Bookshelf
+              compartments={scene.compartments}
+              booksById={scene.booksById}
+              selectedCid={scene.selectedCid}
+              hoveredCid={scene.hoveredCid}
+              task={scene.task}
+              uv={scene.uv}
+              laminate={scene.laminate}
+              inspect={inspectCabinet}
+            />
+          }
+        />
+      </Canvas>
+    </div>
   )
 }

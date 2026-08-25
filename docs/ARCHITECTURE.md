@@ -17,8 +17,11 @@ R3F scene (scene/) ← useFrame reads twinEngine.sample*
 ## 前端表现约定
 
 - 路由：条件渲染 + `React.lazy` 分包（图书 / 分析 / 设备 / 3D 场景）。
-- 顶栏用 `useTwinSelector` 订阅切片，避免无关键字段变化导致重渲染。
-- 3D Canvas：触控端降低 `dpr`、关闭抗锯齿；GLB 加载用 Suspense + ErrorBoundary。
+- 总览 HUD 用 `useTwinSelector` 切片订阅（见 `src/twin/selectors.ts`），避免 4Hz 全树刷新。
+- 总览页保活：切走时 `page-layer.is-parked` + Canvas `frameloop="never"`，避免 3D 冷启动。
+- GLB 分批挂载（柜体 → 龙门 → 送书车）并显示进度条；柜体 `rel=preload`。
+- 字体 `display=optional` + 系统栈兜底；低端档/`prefers-reduced-motion` 关闭极光与星尘。
+- 窄屏：3D 全宽 + 底栏抽屉切换左右面板。
 - 样式按区域拆在 `src/styles/*.css`，由 `src/index.css` `@import` 聚合。
 
 ## 联机 API 契约（校验侧）

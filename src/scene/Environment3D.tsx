@@ -2,9 +2,8 @@ import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 
-function StarDust() {
+function StarDust({ count, animate }: { count: number; animate: boolean }) {
   const geometry = useMemo(() => {
-    const count = 480
     const positions = new Float32Array(count * 3)
     for (let i = 0; i < count; i++) {
       const r = 13 + Math.random() * 15
@@ -17,12 +16,13 @@ function StarDust() {
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     return geo
-  }, [])
+  }, [count])
 
   const groupRef = useRef<THREE.Group>(null)
   const matRef = useRef<THREE.PointsMaterial>(null)
 
   useFrame((_, delta) => {
+    if (!animate) return
     if (groupRef.current) groupRef.current.rotation.y += delta * 0.008
     if (matRef.current) {
       matRef.current.opacity = 0.5 + 0.2 * Math.sin(performance.now() / 1400)
@@ -38,7 +38,13 @@ function StarDust() {
   )
 }
 
-export function Environment3D() {
+type Environment3DProps = {
+  animate?: boolean
+  starDust?: boolean
+  starCount?: number
+}
+
+export function Environment3D({ animate = true, starDust = true, starCount = 480 }: Environment3DProps) {
   return (
     <group>
       <ambientLight intensity={0.62} color="#e7ebff" />
@@ -48,17 +54,14 @@ export function Environment3D() {
       <pointLight position={[-4, 3.4, -3]} intensity={26} color="#7c8cf8" distance={16} />
       <pointLight position={[3.5, 1.2, 3.5]} intensity={15} color="#22d3ee" distance={12} />
       <pointLight position={[0, 4.5, -5]} intensity={12} color="#a78bfa" distance={14} />
-      {/* 柜体内部补光 */}
       <pointLight position={[0.3, 1.6, 0]} intensity={6} color="#aebfff" distance={5} />
 
-      {/* 地面 */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
         <circleGeometry args={[26, 64]} />
         <meshStandardMaterial color="#080b18" roughness={0.9} metalness={0.2} />
       </mesh>
       <gridHelper args={[26, 52, '#2c3766', '#141a35']} position={[0, 0, 0]} />
 
-      {/* 中心光环 */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0.4]}>
         <ringGeometry args={[3.05, 3.11, 96]} />
         <meshBasicMaterial color="#8ca6ff" transparent opacity={0.5} blending={THREE.AdditiveBlending} depthWrite={false} />
@@ -68,7 +71,6 @@ export function Environment3D() {
         <meshBasicMaterial color="#22d3ee" transparent opacity={0.26} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
 
-      {/* 柜体地面投影光晕 */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.002, 0]}>
         <circleGeometry args={[1.9, 64]} />
         <meshBasicMaterial color="#4c5fd0" transparent opacity={0.07} blending={THREE.AdditiveBlending} depthWrite={false} />
@@ -78,7 +80,7 @@ export function Environment3D() {
         <meshBasicMaterial color="#7c8cf8" transparent opacity={0.35} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
 
-      <StarDust />
+      {starDust ? <StarDust count={starCount} animate={animate} /> : null}
     </group>
   )
 }

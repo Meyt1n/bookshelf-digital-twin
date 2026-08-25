@@ -46,26 +46,102 @@
   .devices-bottom {
     grid-template-columns: 1fr;
   }
+
+  .sk-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1200px) {
   body {
-    overflow: auto;
+    overflow: hidden;
   }
 
   .app {
-    height: auto;
-    min-height: 100%;
+    height: 100%;
   }
 
   .layout {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
+    padding: 10px 10px 64px;
+    position: relative;
   }
 
   .viewport {
-    grid-column: 1 / -1;
-    order: -1;
-    height: 62vh;
+    grid-column: 1;
+    order: 0;
+    height: auto;
+    min-height: calc(100vh - 130px);
+  }
+
+  .col-left,
+  .col-right {
+    display: none;
+  }
+
+  .col-left.is-open,
+  .col-right.is-open {
+    display: flex;
+    position: fixed;
+    z-index: 40;
+    top: 68px;
+    bottom: 58px;
+    width: min(360px, 92vw);
+    padding: 10px;
+    overflow: auto;
+    background: rgba(7, 9, 21, 0.92);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--line-strong);
+    border-radius: 16px;
+  }
+
+  .col-left.is-open {
+    left: 10px;
+  }
+
+  .col-right.is-open {
+    right: 10px;
+  }
+
+  .drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    border: 0;
+    background: rgba(3, 5, 14, 0.45);
+  }
+
+  .mobile-dock {
+    display: flex;
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    z-index: 12;
+    gap: 6px;
+    padding: 5px;
+    border-radius: 999px;
+    background: rgba(12, 16, 34, 0.88);
+    border: 1px solid var(--line-strong);
+    backdrop-filter: blur(10px);
+  }
+
+  .dock-btn {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    padding: 8px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+
+  .dock-btn.active {
+    color: var(--text);
+    background: linear-gradient(135deg, rgba(124, 140, 248, 0.35), rgba(34, 211, 238, 0.22));
   }
 
   .main-nav {
@@ -79,5 +155,9 @@
     height: auto;
     padding: 8px 14px;
     gap: 10px;
+  }
+
+  .page-layer.is-parked {
+    inset: 72px 0 0;
   }
 }

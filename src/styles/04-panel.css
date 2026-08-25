@@ -19,6 +19,8 @@
   overflow: hidden;
   animation: panel-in 0.55s cubic-bezier(0.22, 0.9, 0.3, 1.08) backwards;
   transition: box-shadow 0.35s, transform 0.35s;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
 }
 
 .panel:hover {

@@ -88,4 +88,197 @@
   }
 }
 
+.page-layer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-layer.is-parked {
+  position: absolute;
+  inset: 60px 0 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.page-layer.is-active {
+  position: relative;
+  z-index: 1;
+}
+
+.twin-scene-root {
+  position: absolute;
+  inset: 0;
+}
+
+.twin-scene-root canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.scene-progress {
+  pointer-events: none;
+  background: rgba(7, 9, 21, 0.42);
+}
+
+.scene-load-bar {
+  width: min(240px, 56%);
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(124, 140, 248, 0.18);
+  overflow: hidden;
+}
+
+.scene-load-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7c8cf8, #22d3ee);
+  transition: width 280ms ease;
+}
+
+.page-skeleton {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sk-banner,
+.sk-card {
+  border-radius: 14px;
+  background: linear-gradient(
+    90deg,
+    rgba(18, 22, 42, 0.7),
+    rgba(36, 44, 78, 0.55),
+    rgba(18, 22, 42, 0.7)
+  );
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.2s ease-in-out infinite;
+}
+
+.sk-banner {
+  height: 72px;
+}
+
+.sk-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  flex: 1;
+}
+
+.sk-card {
+  min-height: 120px;
+}
+
+@keyframes sk-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+html.reduce-motion .sk-banner,
+html.reduce-motion .sk-card,
+html[data-perf='low'] .sk-banner,
+html[data-perf='low'] .sk-card {
+  animation: none;
+}
+
+/* 驾驶舱上电：顶栏 → 侧栏 → 视口点亮 */
+.app.boot-0 .topbar,
+.app.boot-0 .col,
+.app.boot-0 .viewport-frame,
+.app.boot-0 .vertical-motto {
+  opacity: 0;
+}
+
+.app.boot-1 .topbar {
+  animation: boot-slide-down 420ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
+}
+
+.app.boot-1 .col,
+.app.boot-1 .viewport-frame,
+.app.boot-1 .vertical-motto {
+  opacity: 0;
+}
+
+.app.boot-2 .col-left {
+  animation: boot-fade-up 480ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
+}
+
+.app.boot-2 .col-right {
+  animation: boot-fade-up 480ms 60ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
+}
+
+.app.boot-2 .viewport-frame,
+.app.boot-2 .vertical-motto {
+  opacity: 0;
+}
+
+.app.boot-3 .viewport-frame {
+  animation: boot-frame-glow 700ms ease both;
+}
+
+.app.boot-3 .vertical-motto {
+  animation: boot-fade-up 560ms ease both;
+}
+
+@keyframes boot-slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes boot-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes boot-frame-glow {
+  0% {
+    opacity: 0;
+    filter: brightness(0.6);
+  }
+  60% {
+    opacity: 1;
+    filter: brightness(1.25);
+  }
+  100% {
+    opacity: 1;
+    filter: none;
+  }
+}
+
+html.reduce-motion .app .topbar,
+html.reduce-motion .app .col,
+html.reduce-motion .app .viewport-frame,
+html.reduce-motion .app .vertical-motto {
+  opacity: 1 !important;
+  animation: none !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+.mobile-dock,
+.drawer-scrim {
+  display: none;
+}
+
+
 

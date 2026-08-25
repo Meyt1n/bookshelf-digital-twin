@@ -30,6 +30,11 @@
   }
 }
 
+html.reduce-motion .topbar::after,
+html[data-perf='low'] .topbar::after {
+  animation: none;
+}
+
 .brand {
   display: flex;
   align-items: center;

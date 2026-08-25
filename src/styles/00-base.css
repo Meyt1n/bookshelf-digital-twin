@@ -27,9 +27,9 @@
   --red: #fb7185;
   --grad-main: linear-gradient(135deg, #8ca6ff, #7c8cf8 45%, #22d3ee);
   --grad-text: linear-gradient(135deg, #e3e9ff 10%, #a5b4ff 55%, #7ae7f7);
-  --font-body: 'Noto Sans SC', 'PingFang SC', sans-serif;
-  --font-num: 'Space Grotesk', 'Noto Sans SC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+  --font-body: 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-num: 'Space Grotesk', 'Noto Sans SC', 'DIN Alternate', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Consolas, monospace;
 }
 
 * {
@@ -77,6 +77,17 @@ body::before {
   }
   100% {
     transform: translate3d(3%, -1%, 0) scale(1.02);
+  }
+}
+
+html.reduce-motion body::before,
+html[data-perf='low'] body::before {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
   }
 }
 
