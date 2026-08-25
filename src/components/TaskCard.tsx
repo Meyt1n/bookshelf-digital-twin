@@ -1,21 +1,21 @@
 import { PHASE_LABELS, taskFlow } from '../twin/engine'
-import type { TwinSnapshot } from '../types'
+import { selectTaskCard, taskCardEqual } from '../twin/selectors'
+import { useTwinSelector } from '../twin/useTwin'
 
-export function TaskCard({ snapshot }: { snapshot: TwinSnapshot }) {
-  const { task, ocr } = snapshot
+export function TaskCard() {
+  const { task, ocr, ocrTitle } = useTwinSelector(selectTaskCard, taskCardEqual)
   if (!task && !ocr) return null
 
   const ocrTotal = ocr?.stages.length ?? 0
   const ocrDone = ocr?.stages.filter((s) => s.emitted).length ?? 0
   const ocrCurrent = ocr ? (ocr.stages.find((s) => !s.emitted) ?? ocr.stages[ocrTotal - 1]) : null
-  const ocrBook = ocr ? snapshot.booksById[ocr.bookId] : null
 
   if (!task && ocr && ocrCurrent) {
     return (
       <div className="task-card ocr">
         <div className="task-card-head">
           <span className="task-tag tag-ocr">视觉识别</span>
-          <span className="task-title">《{ocrBook?.title ?? '…'}》</span>
+          <span className="task-title">《{ocrTitle ?? '…'}》</span>
         </div>
         <div className="phase-now">
           <span className="phase-now-label">当前阶段</span>

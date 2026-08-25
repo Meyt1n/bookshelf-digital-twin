@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { PHASE_LABELS } from '../twin/engine'
-import { twinEngine } from '../twin/useTwin'
-import type { TwinSnapshot } from '../types'
+import { commandDeckEqual, selectCommandDeck } from '../twin/selectors'
+import { twinEngine, useTwinSelector } from '../twin/useTwin'
 
-export function CommandDeck({ snapshot }: { snapshot: TwinSnapshot }) {
+export function CommandDeck() {
+  const deck = useTwinSelector(selectCommandDeck, commandDeckEqual)
   const [takeText, setTakeText] = useState('')
-  const busy = snapshot.task !== null || snapshot.ocr !== null
-  const live = snapshot.mode === 'live'
-  const task = snapshot.task
+  const busy = deck.task !== null || deck.ocr !== null
+  const live = deck.mode === 'live'
+  const task = deck.task
 
   const submitTake = () => {
     const text = takeText.trim()
@@ -18,7 +19,7 @@ export function CommandDeck({ snapshot }: { snapshot: TwinSnapshot }) {
 
   const nowLabel = task
     ? `${task.action === 'store' ? '存书' : '取书'} · ${PHASE_LABELS[task.phase] ?? task.phase}`
-    : snapshot.ocr
+    : deck.ocr
       ? '视觉识别中'
       : null
 
@@ -61,16 +62,16 @@ export function CommandDeck({ snapshot }: { snapshot: TwinSnapshot }) {
 
       <button
         type="button"
-        className={`btn btn-violet ${snapshot.modules.uv.status === 'running' ? 'is-running' : ''}`}
-        disabled={snapshot.modules.uv.status === 'running'}
+        className={`btn btn-violet ${deck.uvStatus === 'running' ? 'is-running' : ''}`}
+        disabled={deck.uvStatus === 'running'}
         onClick={() => twinEngine.commandUv()}
       >
         ☢ 紫外消毒
       </button>
       <button
         type="button"
-        className={`btn btn-blue ${snapshot.modules.laminate.status === 'running' ? 'is-running' : ''}`}
-        disabled={snapshot.modules.laminate.status === 'running'}
+        className={`btn btn-blue ${deck.laminateStatus === 'running' ? 'is-running' : ''}`}
+        disabled={deck.laminateStatus === 'running'}
         onClick={() => twinEngine.commandLaminate()}
       >
         ▣ 塑封书籍
@@ -81,7 +82,7 @@ export function CommandDeck({ snapshot }: { snapshot: TwinSnapshot }) {
       <label className={`auto-toggle ${live ? 'disabled' : ''}`} title="自动仿真家庭成员的存取书行为">
         <input
           type="checkbox"
-          checked={snapshot.autonomous}
+          checked={deck.autonomous}
           disabled={live}
           onChange={(e) => twinEngine.setAutonomous(e.target.checked)}
         />

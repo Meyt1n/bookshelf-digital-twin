@@ -1,24 +1,25 @@
 import { useEffect, useState } from 'react'
 import { categoryColor } from '../catalog'
 import { fmtRelative } from '../format'
-import { twinEngine } from '../twin/useTwin'
-import type { Compartment, TwinSnapshot } from '../types'
+import { compartmentPanelEqual, selectCompartmentPanel, type CompartmentPanelSlice } from '../twin/selectors'
+import { twinEngine, useTwinSelector } from '../twin/useTwin'
+import type { Compartment } from '../types'
 
-function tileClass(comp: Compartment, snapshot: TwinSnapshot): string {
+function tileClass(comp: Compartment, slice: CompartmentPanelSlice): string {
   const classes = ['cell-tile']
   classes.push(comp.status === 'occupied' ? 'is-occupied' : 'is-free')
-  if (snapshot.selectedCid === comp.cid) classes.push('is-selected')
-  if (snapshot.hoveredCid === comp.cid) classes.push('is-hovered')
-  const task = snapshot.task
+  if (slice.selectedCid === comp.cid) classes.push('is-selected')
+  if (slice.hoveredCid === comp.cid) classes.push('is-hovered')
+  const task = slice.task
   if (task && task.cid === comp.cid && task.phase !== 'done') {
     classes.push(task.action === 'store' ? 'is-storing' : 'is-taking')
   }
   return classes.join(' ')
 }
 
-function SelectedDetail({ snapshot }: { snapshot: TwinSnapshot }) {
-  const cid = snapshot.selectedCid
-  const comp = snapshot.compartments.find((c) => c.cid === cid) ?? null
+function SelectedDetail({ slice }: { slice: CompartmentPanelSlice }) {
+  const cid = slice.selectedCid
+  const comp = slice.compartments.find((c) => c.cid === cid) ?? null
   const [pickBookId, setPickBookId] = useState<number | ''>('')
   useEffect(() => setPickBookId(''), [cid])
 
@@ -26,9 +27,9 @@ function SelectedDetail({ snapshot }: { snapshot: TwinSnapshot }) {
     return <div className="cell-detail empty">点击矩阵或 3D 格口查看详情</div>
   }
 
-  const busy = snapshot.task !== null || snapshot.ocr !== null
-  const meta = snapshot.stored[comp.cid]
-  const book = comp.bookId !== null ? snapshot.booksById[comp.bookId] : null
+  const busy = slice.task !== null || slice.ocr !== null
+  const meta = slice.stored[comp.cid]
+  const book = comp.bookId !== null ? slice.booksById[comp.bookId] : null
 
   return (
     <div className="cell-detail">
@@ -70,12 +71,12 @@ function SelectedDetail({ snapshot }: { snapshot: TwinSnapshot }) {
           <select
             className="input select-book"
             value={pickBookId}
-            disabled={snapshot.mode === 'live'}
+            disabled={slice.mode === 'live'}
             onChange={(e) => setPickBookId(e.target.value === '' ? '' : Number(e.target.value))}
           >
             <option value="">选择要存入的图书…</option>
-            {snapshot.offShelfBookIds.map((id) => {
-              const b = snapshot.booksById[id]
+            {slice.offShelfBookIds.map((id) => {
+              const b = slice.booksById[id]
               return (
                 <option key={id} value={id}>
                   《{b.title}》 · {b.category}
@@ -86,12 +87,12 @@ function SelectedDetail({ snapshot }: { snapshot: TwinSnapshot }) {
           <button
             type="button"
             className="btn btn-green btn-block"
-            disabled={busy || pickBookId === '' || snapshot.mode === 'live'}
+            disabled={busy || pickBookId === '' || slice.mode === 'live'}
             onClick={() => {
               if (pickBookId !== '') twinEngine.commandStoreTo(comp.cid, pickBookId)
             }}
           >
-            {snapshot.mode === 'live' ? '联机模式请在实体端存书' : busy ? '任务执行中…' : '⤒ 视觉识别并存入'}
+            {slice.mode === 'live' ? '联机模式请在实体端存书' : busy ? '任务执行中…' : '⤒ 视觉识别并存入'}
           </button>
         </>
       )}
@@ -99,7 +100,8 @@ function SelectedDetail({ snapshot }: { snapshot: TwinSnapshot }) {
   )
 }
 
-export function CompartmentPanel({ snapshot }: { snapshot: TwinSnapshot }) {
+export function CompartmentPanel() {
+  const slice = useTwinSelector(selectCompartmentPanel, compartmentPanelEqual)
   const floors = [1, 2]
   return (
     <section className="panel">
@@ -127,16 +129,16 @@ export function CompartmentPanel({ snapshot }: { snapshot: TwinSnapshot }) {
         {floors.map((floor) => (
           <div key={floor} className="cell-row">
             <span className="floor-tag">F{floor}</span>
-            {snapshot.compartments
+            {slice.compartments
               .filter((c) => c.floor === floor)
               .map((comp) => {
-                const book = comp.bookId !== null ? snapshot.booksById[comp.bookId] : null
+                const book = comp.bookId !== null ? slice.booksById[comp.bookId] : null
                 return (
                   <button
                     key={comp.cid}
                     type="button"
-                    className={tileClass(comp, snapshot)}
-                    onClick={() => twinEngine.setSelected(snapshot.selectedCid === comp.cid ? null : comp.cid)}
+                    className={tileClass(comp, slice)}
+                    onClick={() => twinEngine.setSelected(slice.selectedCid === comp.cid ? null : comp.cid)}
                     onMouseEnter={() => twinEngine.setHovered(comp.cid)}
                     onMouseLeave={() => twinEngine.setHovered(null)}
                   >
@@ -149,7 +151,7 @@ export function CompartmentPanel({ snapshot }: { snapshot: TwinSnapshot }) {
         ))}
       </div>
 
-      <SelectedDetail snapshot={snapshot} />
+      <SelectedDetail slice={slice} />
     </section>
   )
 }

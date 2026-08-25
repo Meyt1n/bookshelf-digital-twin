@@ -100,8 +100,8 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
   return (
     <div className="layout">
       <aside className="col col-left">
-        <CompartmentPanel snapshot={snapshot} />
-        <InventoryTabs snapshot={snapshot} />
+        <CompartmentPanel />
+        <InventoryTabs />
       </aside>
 
       <main className="viewport">
@@ -123,8 +123,8 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
         </ErrorBoundary>
         <div className="viewport-frame" />
         <div className="vertical-motto">格物致知 · 藏书于阁</div>
-        <KpiStrip snapshot={snapshot} />
-        <TaskCard snapshot={snapshot} />
+        <KpiStrip />
+        <TaskCard />
         {hovered && (
           <div className="hover-tip">
             <b>
@@ -197,14 +197,14 @@ function OverviewPage({ snapshot }: { snapshot: TwinSnapshot }) {
             <span className="view-inspect-hint">半透明查看内部结构 · 可拖拽环视</span>
           )}
         </div>
-        <CommandDeck snapshot={snapshot} />
+        <CommandDeck />
       </main>
 
       <aside className="col col-right">
-        <TelemetryPanel snapshot={snapshot} />
-        <ModulesPanel snapshot={snapshot} />
-        <RegisterPanel snapshot={snapshot} />
-        <EventStream snapshot={snapshot} />
+        <TelemetryPanel />
+        <ModulesPanel />
+        <RegisterPanel />
+        <EventStream />
       </aside>
     </div>
   )
