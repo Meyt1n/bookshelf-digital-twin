@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * Offline GLB optimize (no Meshopt/Draco decoder required at runtime).
- * Weld / dedup / prune / resample — keeps Three GLTFLoader compatible.
+ * Offline GLB optimize with Meshopt compression (runtime via MeshoptGLTFLoader).
  */
 import { execFileSync } from 'node:child_process'
 import { readdirSync, statSync } from 'node:fs'
@@ -19,7 +18,7 @@ for (const file of files) {
   const before = statSync(input).size
   execFileSync(
     'npx',
-    ['gltf-transform', 'optimize', input, input, '--compress', 'false', '--texture-compress', 'false'],
+    ['gltf-transform', 'optimize', input, input, '--compress', 'meshopt', '--texture-compress', 'false'],
     { stdio: 'inherit' },
   )
   const after = statSync(input).size

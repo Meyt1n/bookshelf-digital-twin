@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react'
 import { useFrame, useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { MeshoptGLTFLoader } from './loadGltf'
 import { categoryColor } from '../catalog'
 import { twinEngine, taskPhaseProgress } from '../twin/engine'
 import type { BookInfo, Compartment, ModuleState, MotionTask } from '../types'
@@ -346,7 +346,7 @@ function applyInspect(mat: THREE.MeshStandardMaterial, inspect: boolean, dim: nu
 
 /** 柜体主体：真实 STEP 模型（智能书柜.STEP → GLB，按部件染色） */
 function CabinetBody({ inspect }: { inspect: boolean }) {
-  const gltf = useLoader(GLTFLoader, '/model/bookcase-body.glb')
+  const gltf = useLoader(MeshoptGLTFLoader, '/model/bookcase-body.glb')
   const leftRef = useRef<THREE.Group>(null)
   const rightRef = useRef<THREE.Group>(null)
 

@@ -1,5 +1,5 @@
 import { selectTelemetry } from '../twin/selectors'
-import { useTwinSelector } from '../twin/useTwin'
+import { useThrottledTwinSelector } from '../twin/useTwin'
 import type { TelemetryPoint } from '../types'
 
 type SparkProps = {
@@ -44,7 +44,7 @@ const CLIMATE_SOURCE_HINT: Record<string, string> = {
 }
 
 export function TelemetryPanel() {
-  const telemetry = useTwinSelector(selectTelemetry)
+  const telemetry = useThrottledTwinSelector(selectTelemetry, Object.is, 500)
   const currentPct = Math.min(100, (telemetry.motorCurrent / 1.2) * 100)
   const motorBusy = telemetry.motorCurrent > 0.35
   const tempOk = telemetry.temperature >= 23 && telemetry.temperature <= 26

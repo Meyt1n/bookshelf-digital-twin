@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { useFrame, useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { MeshoptGLTFLoader } from './loadGltf'
 import { categoryColor } from '../catalog'
 import { twinEngine } from '../twin/engine'
 import { BookMesh } from './BookMesh'
@@ -61,7 +61,7 @@ type RobotParts = {
 }
 
 function useRobotParts(): RobotParts {
-  const gltf = useLoader(GLTFLoader, '/model/delivery-robot.glb')
+  const gltf = useLoader(MeshoptGLTFLoader, '/model/delivery-robot.glb')
   return useMemo(() => {
     const root = gltf.scene.clone(true)
     const parts: Partial<RobotParts> = {}

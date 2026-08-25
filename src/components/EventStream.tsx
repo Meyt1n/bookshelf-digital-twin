@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { fmtTime } from '../format'
 import { refEqual, selectEvents } from '../twin/selectors'
-import { useTwinSelector } from '../twin/useTwin'
+import { useThrottledTwinSelector } from '../twin/useTwin'
 import type { EventKind } from '../types'
 
 const KIND_ICONS: Record<EventKind, string> = {
@@ -27,7 +27,7 @@ const FILTERS: Array<{ id: FilterId; label: string; kinds: EventKind[] | null }>
 ]
 
 export function EventStream() {
-  const allEvents = useTwinSelector(selectEvents, refEqual)
+  const allEvents = useThrottledTwinSelector(selectEvents, refEqual, 500)
   const [filter, setFilter] = useState<FilterId>('all')
   const active = FILTERS.find((f) => f.id === filter) ?? FILTERS[0]
   const events =
