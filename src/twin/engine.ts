@@ -1,0 +1,1812 @@
+import { BOOKS, MEMBERS } from '../catalog'
+import type { Member } from '../catalog'
+import {
+  CART_DOCK,
+  CART_HOME,
+  CART_LANE_TO_DOCK,
+  CELLS_PER_FLOOR,
+  FLOORS,
+  GANTRY_CARRY_SWING,
+  GANTRY_HOME,
+  GANTRY_SWING_GUIDE,
+  GANTRY_SWING_IDLE,
+  GANTRY_SWING_RECEIVE,
+  GANTRY_TIP_CLAMP_SWING,
+  GANTRY_TIP_SHIFT_Z,
+  HEAD_REST,
+  BAY_MOUTH_Z,
+  BAY_PARK_Z,
+  BAY_REAR_Z,
+  SLOT_MOUTH_LOCAL_Z,
+  bayHeldBookWorld,
+  laminateBookWorld,
+  cellX,
+  cellY,
+  cellZ,
+  clamp01,
+  easeInOut,
+  gantryHeldBookWorld,
+  lerpPath,
+  lerpVec3,
+  robotHeldBookWorld,
+  slotHeldBookWorld,
+} from '../scene/layout'
+import type {
+  BookInfo,
+  BayPose,
+  BookCarrier,
+  BookFlight,
+  CartPose,
+  Compartment,
+  EventKind,
+  EventLevel,
+  GantryPose,
+  LaminatePose,
+  LinkState,
+  ModuleState,
+  MotionTask,
+  OcrJob,
+  Registers,
+  SelfCheck,
+  StoredMeta,
+  TaskAction,
+  TaskPhase,
+  TelemetryPoint,
+  TrendDay,
+  TwinEvent,
+  TwinSnapshot,
+} from '../types'
+
+const TICK_MS = 250
+const TELEMETRY_SAMPLE_MS = 2000
+const HISTORY_CAP = 96
+const EVENT_CAP = 80
+
+/** 与 services/stm32_protocol.py 对应的指令与应答码 */
+export const CMD_FETCH = 0x01
+export const CMD_STORE = 0x02
+export const ACK_OK = 0x00
+export const ACK_FAULT = 0x03
+export const ACK_PENDING = 0xff
+
+export const ACK_LABELS: Record<number, string> = {
+  [ACK_OK]: 'OK',
+  0x01: 'BUSY',
+  0x02: 'PARAM_ERR',
+  [ACK_FAULT]: 'FAULT',
+  0x04: 'UNKNOWN_CMD',
+  0x05: 'I2C_ERR',
+  [ACK_PENDING]: 'PENDING',
+}
+
+const PHASE_MS: Record<string, number> = {
+  dispatch: 900,
+  ack: 700,
+  deliver: 3400,
+  scan: 3200,
+  handoff: 2800,
+  lift: 1500,
+  traverse: 1300,
+  operate: 2800,
+  retract: 1300,
+  return: 1500,
+  done: 500,
+  fault: 1300,
+}
+
+export const PHASE_LABELS: Record<string, string> = {
+  dispatch: '指令下发',
+  ack: '控制器应答',
+  deliver: '柜后直送大隔间',
+  scan: '夹板拍照识别',
+  handoff: '履带交夹爪',
+  lift: '横梁升降',
+  traverse: '夹爪横移',
+  operate: '夹爪履带送入',
+  retract: '夹爪回左侧',
+  return: '回到二层起点',
+  done: '完成',
+  fault: '急停',
+}
+
+/** 存书：机器人把书放入大隔间 → 夹板夹紧顿住 → 摄像头拍照识别 → 履带交夹爪 → 再送入目标格。 */
+export function taskFlow(action: TaskAction): TaskPhase[] {
+  if (action === 'store') {
+    return ['dispatch', 'ack', 'deliver', 'scan', 'handoff', 'lift', 'traverse', 'operate', 'retract', 'return']
+  }
+  return ['dispatch', 'ack', 'lift', 'traverse', 'operate', 'retract', 'return', 'handoff']
+}
+
+export function taskPhaseProgress(task: MotionTask, now = performance.now()): number {
+  return clamp01((now - task.phaseStart) / (PHASE_MS[task.phase] ?? 1))
+}
+
+const UV_DURATION = 6000
+const LAMINATE_DURATION = 10000
+const MODULE_RESET_MS = 2400
+
+type GantrySeg = {
+  fromX: number
+  fromY: number
+  fromZ: number
+  toX: number
+  toY: number
+  toZ: number
+  start: number
+  dur: number
+}
+
+type SimBackup = {
+  compartments: Compartment[]
+  stored: Record<number, StoredMeta>
+  booksById: Record<number, BookInfo>
+  weeklyTrend: TrendDay[]
+  memberActivity: Record<string, number>
+  bookActivity: Record<number, number>
+  cellActivity: Record<number, number>
+  storeCount: number
+  takeCount: number
+}
+
+type DeviceBorrowLog = {
+  id: number
+  action: 'store' | 'take'
+  compartment_id: number | null
+  action_time: string | null
+  title: string | null
+  user_name: string | null
+}
+
+type DeviceClimate = {
+  temperature: number
+  humidity: number
+  source: string
+}
+
+/** /api/voice_stream 推送的事件载荷（语音对话 or borrow_logs 衍生的存取事件） */
+type StreamPayload = {
+  type?: string
+  role?: string
+  text?: string
+  source?: string
+  action?: string
+  title?: string
+  cid?: number | string
+}
+
+function rand(min: number, max: number): number {
+  return min + Math.random() * (max - min)
+}
+
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)]
+}
+
+function idleModule(): ModuleState {
+  return { status: 'idle', startedAt: 0, duration: 0 }
+}
+
+/** 初始在架分布：与主项目 find_free_compartment 的顺位分配习惯一致 */
+const INITIAL_STORED: Array<[number, number, string]> = [
+  [2, 7, '周星禾'],
+  [3, 19, '周知远'],
+  [5, 12, '周妈妈'],
+  [6, 1, '周爸爸'],
+  [8, 14, '周知远'],
+]
+
+export class TwinEngine {
+  private listeners = new Set<() => void>()
+  private snapshot!: TwinSnapshot
+
+  private mode: 'sim' | 'live' = 'sim'
+  private liveHealthy = false
+  private autonomous = false
+  private compartments: Compartment[] = []
+  private booksById: Record<number, BookInfo> = {}
+  private stored: Record<number, StoredMeta> = {}
+  private task: MotionTask | null = null
+  private ocr: OcrJob | null = null
+  private registers: Registers = { newCmdFlag: 0, cmd: 0, floorId: 0, cellId: 0, ack: ACK_OK }
+  private temperature = 24.6
+  private humidity = 52
+  private motorCurrent = 0.07
+  private history: TelemetryPoint[] = []
+  private uv: ModuleState = idleModule()
+  private laminate: ModuleState = idleModule()
+  private laminateBookId: number | null = null
+  private laminatePresented = false
+  private camera: ModuleState = idleModule()
+  private events: TwinEvent[] = []
+  private stats = { storeCount: 0, takeCount: 0, uvCount: 0, laminateCount: 0 }
+  private memberActivity: Record<string, number> = {}
+  private bookActivity: Record<number, number> = {}
+  private cellActivity: Record<number, number> = {}
+  private weeklyTrend: TrendDay[] = []
+  private selfCheck: SelfCheck | null = null
+  private selectedCid: number | null = null
+  private hoveredCid: number | null = null
+  private bootAt = Date.now()
+
+  private gantrySeg: GantrySeg = {
+    fromX: GANTRY_HOME.x,
+    fromY: GANTRY_HOME.y,
+    fromZ: HEAD_REST.z,
+    toX: GANTRY_HOME.x,
+    toY: GANTRY_HOME.y,
+    toZ: HEAD_REST.z,
+    start: 0,
+    dur: 1,
+  }
+
+  private evtSeq = 1
+  private taskSeq = 1
+  private nextAutoAt = 0
+  private lastSampleAt = 0
+  private tickTimer: number | null = null
+  private moduleResetTimers: number[] = []
+  private pollTimer: number | null = null
+  private simBackup: SimBackup | null = null
+  private apiBase: string
+  private sse: EventSource | null = null
+  private sseHealthy = false
+  private climateTimer: number | null = null
+  private liveClimate: DeviceClimate | null = null
+
+  constructor() {
+    this.apiBase = (import.meta.env.VITE_API_BASE as string | undefined) ?? ''
+    this.resetSimWorld()
+    this.seedHistory()
+    this.pushEvent('system', 'ok', '数字孪生内核已启动 · 仿真时钟就绪')
+    this.pushEvent('system', 'info', `已加载书架拓扑 ${FLOORS} 层 × ${CELLS_PER_FLOOR} 格 · 共 ${FLOORS * CELLS_PER_FLOOR} 个格口`)
+    this.pushEvent('link', 'info', '遥测通道在线 · 环境采样 0.5 Hz')
+    const now = performance.now()
+    this.nextAutoAt = now + rand(7000, 12000)
+    this.lastSampleAt = 0
+    this.rebuildSnapshot()
+  }
+
+  /* ---------------- 基础设施 ---------------- */
+
+  subscribe = (fn: () => void): (() => void) => {
+    this.listeners.add(fn)
+    return () => this.listeners.delete(fn)
+  }
+
+  getSnapshot = (): TwinSnapshot => this.snapshot
+
+  start(): void {
+    if (this.tickTimer !== null) return
+    this.tickTimer = window.setInterval(() => this.tick(), TICK_MS)
+  }
+
+  dispose(): void {
+    if (this.tickTimer !== null) window.clearInterval(this.tickTimer)
+    if (this.pollTimer !== null) window.clearInterval(this.pollTimer)
+    this.moduleResetTimers.forEach((t) => window.clearTimeout(t))
+    this.tickTimer = null
+    this.pollTimer = null
+    this.disconnectStream()
+    this.stopClimatePolling()
+  }
+
+  private emit(): void {
+    this.rebuildSnapshot()
+    this.listeners.forEach((fn) => fn())
+  }
+
+  private rebuildSnapshot(): void {
+    const offShelf = Object.values(this.booksById)
+      .map((b) => b.id)
+      .filter((id) => !Object.values(this.stored).some((s) => s.bookId === id))
+      .sort((a, b) => a - b)
+
+    this.snapshot = {
+      mode: this.mode,
+      liveHealthy: this.liveHealthy,
+      autonomous: this.autonomous,
+      compartments: this.compartments.map((c) => ({ ...c })),
+      booksById: { ...this.booksById },
+      stored: { ...this.stored },
+      offShelfBookIds: offShelf,
+      task: this.task ? { ...this.task } : null,
+      ocr: this.ocr ? { ...this.ocr, stages: this.ocr.stages.map((s) => ({ ...s })) } : null,
+      registers: { ...this.registers },
+      telemetry: {
+        temperature: this.temperature,
+        humidity: this.humidity,
+        motorCurrent: this.motorCurrent,
+        history: this.history.slice(),
+        climateSource: this.mode === 'live' && this.liveClimate ? this.liveClimate.source : 'sim',
+      },
+      modules: { uv: { ...this.uv }, laminate: { ...this.laminate }, camera: { ...this.camera } },
+      links: this.buildLinks(),
+      events: this.events.slice(),
+      stats: {
+        ...this.stats,
+        memberActivity: { ...this.memberActivity },
+        bookActivity: { ...this.bookActivity },
+        cellActivity: { ...this.cellActivity },
+      },
+      selectedCid: this.selectedCid,
+      hoveredCid: this.hoveredCid,
+      weeklyTrend: this.buildWeeklyTrend(),
+      selfCheck: this.selfCheck
+        ? { ...this.selfCheck, stages: this.selfCheck.stages.map((s) => ({ ...s })) }
+        : null,
+      bootAt: this.bootAt,
+    }
+  }
+
+  /** 最近 7 天趋势：前 6 天为模拟历史，今天为实时统计 */
+  private buildWeeklyTrend(): TrendDay[] {
+    const trend = this.weeklyTrend.map((d) => ({ ...d }))
+    trend.push({
+      label: '今天',
+      store: this.stats.storeCount,
+      take: this.stats.takeCount,
+    })
+    return trend
+  }
+
+  private buildLinks(): LinkState[] {
+    if (this.mode === 'live') {
+      return [
+        { id: 'ui', label: '孪生驾驶舱', status: 'online', latencyMs: 0 },
+        { id: 'flask', label: 'Flask 服务', status: this.liveHealthy ? 'online' : 'offline', latencyMs: this.liveHealthy ? this.liveLatency : null },
+        { id: 'pi', label: 'Pi 桥接', status: 'unknown', latencyMs: null },
+        { id: 'stm32', label: 'STM32', status: 'unknown', latencyMs: null },
+      ]
+    }
+    return [
+      { id: 'ui', label: '孪生驾驶舱', status: 'online', latencyMs: 0 },
+      { id: 'flask', label: 'Flask 服务', status: 'sim', latencyMs: Math.round(rand(2, 6)) },
+      { id: 'pi', label: 'Pi 桥接', status: 'sim', latencyMs: Math.round(rand(1, 4)) },
+      { id: 'stm32', label: 'STM32', status: 'sim', latencyMs: Math.round(rand(1, 3)) },
+    ]
+  }
+
+  private pushEvent(kind: EventKind, level: EventLevel, text: string): void {
+    this.events.unshift({ id: this.evtSeq++, at: Date.now(), kind, level, text })
+    if (this.events.length > EVENT_CAP) this.events.length = EVENT_CAP
+  }
+
+  /* ---------------- 世界初始化 ---------------- */
+
+  private resetSimWorld(): void {
+    this.booksById = {}
+    BOOKS.forEach((b) => {
+      this.booksById[b.id] = b
+    })
+    this.compartments = []
+    for (let floor = 1; floor <= FLOORS; floor++) {
+      for (let cell = 1; cell <= CELLS_PER_FLOOR; cell++) {
+        const cid = (floor - 1) * CELLS_PER_FLOOR + cell
+        this.compartments.push({ cid, floor, cell, status: 'free', bookId: null })
+      }
+    }
+    this.stored = {}
+    const base = Date.now() - 1000 * 60 * 60 * 20
+    INITIAL_STORED.forEach(([cid, bookId, by], i) => {
+      const comp = this.compartments.find((c) => c.cid === cid)
+      if (!comp) return
+      comp.status = 'occupied'
+      comp.bookId = bookId
+      this.stored[cid] = { bookId, storedAt: base + i * 1000 * 60 * 137, storedBy: by }
+    })
+  }
+
+  /** 植入模拟历史：过去 6 天趋势、格口与书籍的累计使用量 */
+  private seedHistory(): void {
+    const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+    const today = new Date().getDay()
+    this.weeklyTrend = []
+    for (let i = 6; i >= 1; i--) {
+      const idx = (today - i + 7) % 7
+      this.weeklyTrend.push({
+        label: dayNames[idx],
+        store: Math.round(rand(2, 7)),
+        take: Math.round(rand(3, 9)),
+      })
+    }
+    for (const comp of this.compartments) {
+      this.cellActivity[comp.cid] = Math.round(rand(2, 14))
+    }
+    for (const book of BOOKS) {
+      this.bookActivity[book.id] = Math.round(rand(0, 9))
+    }
+    for (const member of MEMBERS) {
+      this.memberActivity[member.name] = Math.round(rand(2, 9))
+    }
+  }
+
+  /* ---------------- 主循环 ---------------- */
+
+  private tick(): void {
+    const now = performance.now()
+    this.tickTelemetry(now)
+    this.tickModules(now)
+    this.tickTask(now)
+    this.tickOcr(now)
+    this.tickSelfCheck(now)
+    this.tickAutonomous(now)
+    this.emit()
+  }
+
+  private tickSelfCheck(now: number): void {
+    const sc = this.selfCheck
+    if (!sc) return
+    for (const stage of sc.stages) {
+      if (!stage.emitted && now - sc.startedAt >= stage.at) {
+        stage.emitted = true
+        this.pushEvent('diag', stage.level === 'ok' ? 'ok' : 'info', stage.text)
+      }
+    }
+    const allDone = sc.stages.every((s) => s.emitted)
+    if (allDone && sc.finishedAt === null) {
+      sc.finishedAt = now
+      const timer = window.setTimeout(() => {
+        this.selfCheck = null
+        this.emit()
+      }, 3200)
+      this.moduleResetTimers.push(timer)
+    }
+  }
+
+  private tickTelemetry(now: number): void {
+    if (this.mode === 'live' && this.liveClimate) {
+      // 联机：温湿度向实体遥测值平滑收敛（不做随机游走）
+      this.temperature += (this.liveClimate.temperature - this.temperature) * 0.2
+      this.humidity += (this.liveClimate.humidity - this.humidity) * 0.2
+    } else {
+      this.temperature = Math.min(26.8, Math.max(22.5, this.temperature + rand(-0.06, 0.06)))
+      this.humidity = Math.min(62, Math.max(45, this.humidity + rand(-0.3, 0.3)))
+    }
+    const busy =
+      this.task &&
+      ['deliver', 'handoff', 'lift', 'traverse', 'operate', 'retract', 'return'].includes(this.task.phase)
+    const target = busy ? rand(0.78, 1.05) : this.ocr ? 0.16 : 0.07
+    this.motorCurrent += (target - this.motorCurrent) * 0.35
+    if (now - this.lastSampleAt >= TELEMETRY_SAMPLE_MS) {
+      this.lastSampleAt = now
+      this.history.push({ at: Date.now(), temperature: this.temperature, humidity: this.humidity })
+      if (this.history.length > HISTORY_CAP) this.history.shift()
+    }
+  }
+
+  private tickModules(now: number): void {
+    for (const [key, mod] of [
+      ['uv', this.uv],
+      ['laminate', this.laminate],
+    ] as Array<['uv' | 'laminate', ModuleState]>) {
+      if (mod.status === 'running' && now - mod.startedAt >= mod.duration) {
+        mod.status = 'done'
+        if (key === 'uv') {
+          this.stats.uvCount++
+          this.pushEvent('uv', 'ok', '紫外线消毒流程已完成 · 柜内环境已更新')
+        } else {
+          this.stats.laminateCount++
+          this.laminatePresented = true
+          this.pushEvent('laminate', 'ok', '塑封完成 · 整本覆膜已封口，成品停在抽屉入口')
+        }
+        const timer = window.setTimeout(() => {
+          if (mod.status === 'done') {
+            mod.status = 'idle'
+            this.emit()
+          }
+        }, MODULE_RESET_MS)
+        this.moduleResetTimers.push(timer)
+      }
+    }
+  }
+
+  private tickOcr(now: number): void {
+    if (!this.ocr) return
+    for (const stage of this.ocr.stages) {
+      if (!stage.emitted && now - this.ocr.startedAt >= stage.at) {
+        stage.emitted = true
+        this.pushEvent('ocr', 'info', stage.text)
+      }
+    }
+    const last = this.ocr.stages[this.ocr.stages.length - 1]
+    if (last.emitted && this.task?.phase !== 'scan') {
+      this.ocr = null
+      this.camera.status = 'idle'
+    }
+  }
+
+  private moveGantryTo(now: number, toX: number, toY: number, toZ: number, dur: number): void {
+    const pose = this.sampleGantry(now)
+    this.gantrySeg = {
+      fromX: pose.x,
+      fromY: pose.y,
+      fromZ: pose.z,
+      toX,
+      toY,
+      toZ,
+      start: now,
+      dur,
+    }
+  }
+
+  private tickTask(now: number): void {
+    const task = this.task
+    if (!task) return
+    const dur = PHASE_MS[task.phase]
+    if (now - task.phaseStart < dur) return
+
+    const layer = task.floor === 1 ? '上层' : '下层'
+    const slotY = cellY(task.floor)
+    const slotX = cellX(task.cell)
+    const slotZ = cellZ(task.floor)
+
+    switch (task.phase) {
+      case 'dispatch': {
+        this.registers.newCmdFlag = 0
+        this.registers.ack = ACK_OK
+        task.phase = 'ack'
+        task.phaseStart = now
+        this.pushEvent('motion', 'info', `STM32 应答 ACK=0x00 (OK) · 任务 ${task.id} 进入执行队列`)
+        break
+      }
+      case 'ack': {
+        if (task.action === 'store') {
+          task.phase = 'deliver'
+          task.phaseStart = now
+          this.pushEvent('motion', 'info', `送书机器人从柜后将《${task.title}》直送第二层左侧大隔间 · 夹爪原地待命`)
+        } else {
+          task.phase = 'lift'
+          task.phaseStart = now
+          this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.lift)
+          this.pushEvent('motion', 'info', `横梁竖直升降 → ${layer}底板`)
+        }
+        break
+      }
+      case 'deliver': {
+        if (task.action === 'store') {
+          task.phase = 'scan'
+          task.phaseStart = now
+          this.beginBayScan(task)
+          this.pushEvent('motion', 'info', `夹板夹紧《${task.title}》· 顿住，大隔间上方摄像头拍照识别`)
+        } else {
+          task.phase = 'handoff'
+          task.phaseStart = now
+        }
+        break
+      }
+      case 'scan': {
+        task.phase = 'handoff'
+        task.phaseStart = now
+        this.pushEvent('motion', 'info', `识别完成 · 大隔间履带将《${task.title}》送到夹爪`)
+        break
+      }
+      case 'handoff': {
+        if (task.action === 'store') {
+          task.phase = 'lift'
+          task.phaseStart = now
+          this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.lift)
+          this.pushEvent('motion', 'info', `横梁竖直升降 → ${layer}底板`)
+        } else {
+          task.phase = 'done'
+          task.phaseStart = now
+          this.stats.takeCount++
+          this.pushEvent('take', 'ok', `取书完成 ·《${task.title}》已在第二层左侧大隔间交送书机器人（${task.actor}）`)
+          this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
+          this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
+          this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
+        }
+        break
+      }
+      case 'lift': {
+        task.phase = 'traverse'
+        task.phaseStart = now
+        this.moveGantryTo(now, slotX, slotY, slotZ, PHASE_MS.traverse)
+        this.pushEvent('motion', 'info', `夹爪沿丝杆横移 → ${layer} ${task.cell} 号隔间`)
+        break
+      }
+      case 'traverse': {
+        task.phase = 'operate'
+        task.phaseStart = now
+        this.pushEvent(
+          'motion',
+          'info',
+          task.action === 'store'
+            ? `夹爪到位 · 内履带将《${task.title}》送到槽口，隔间履带送入深处`
+            : `夹爪到位 · 隔间履带将《${task.title}》送到槽口，内履带卷入`,
+        )
+        break
+      }
+      case 'operate': {
+        this.applyInventoryChange(task)
+        task.phase = 'retract'
+        task.phaseStart = now
+        this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.retract)
+        this.pushEvent('motion', 'info', `夹爪沿丝杆回到左侧大隔间`)
+        break
+      }
+      case 'retract': {
+        task.phase = 'return'
+        task.phaseStart = now
+        this.moveGantryTo(now, GANTRY_HOME.x, GANTRY_HOME.y, HEAD_REST.z, PHASE_MS.return)
+        this.pushEvent('motion', 'info', `横梁回到第二层左侧大隔间`)
+        break
+      }
+      case 'return': {
+        if (task.action === 'take') {
+          task.phase = 'handoff'
+          task.phaseStart = now
+          this.pushEvent('motion', 'info', `夹爪将《${task.title}》放回左侧大隔间 · 夹板固定后交送书机器人`)
+        } else {
+          task.phase = 'done'
+          task.phaseStart = now
+          this.stats.storeCount++
+          this.pushEvent('store', 'ok', `存书完成 ·《${task.title}》已入 ${task.floor} 层 ${task.cell} 号格（${task.actor}）`)
+          this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
+          this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
+          this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
+        }
+        break
+      }
+      case 'done': {
+        this.task = null
+        break
+      }
+      case 'fault': {
+        this.task = null
+        break
+      }
+    }
+  }
+
+  private applyInventoryChange(task: MotionTask): void {
+    const comp = this.compartments.find((c) => c.cid === task.cid)
+    if (!comp) return
+    if (task.action === 'store') {
+      comp.status = 'occupied'
+      comp.bookId = task.bookId
+      this.stored[task.cid] = { bookId: task.bookId, storedAt: Date.now(), storedBy: task.actor }
+    } else {
+      comp.status = 'free'
+      comp.bookId = null
+      delete this.stored[task.cid]
+    }
+  }
+
+  private tickAutonomous(now: number): void {
+    if (!this.autonomous || this.mode !== 'sim') return
+    if (this.task || this.ocr) return
+    if (now < this.nextAutoAt) return
+    this.nextAutoAt = now + rand(11000, 22000)
+
+    const member = pick(MEMBERS)
+    const storedCids = Object.keys(this.stored).map(Number)
+    const offShelf = this.snapshot.offShelfBookIds
+    const freeCids = this.compartments.filter((c) => c.status === 'free').map((c) => c.cid)
+
+    const canTake = storedCids.length > 0
+    const canStore = offShelf.length > 0 && freeCids.length > 0
+    if (!canTake && !canStore) return
+
+    const doTake = canTake && (!canStore || Math.random() < 0.55)
+    if (doTake) {
+      const cid = pick(storedCids)
+      const book = this.booksById[this.stored[cid].bookId]
+      this.emitVoiceIntent(member, book, cid)
+      this.startTask('take', cid, book.id, `${member.name} · 语音`)
+    } else {
+      const bookId = pick(offShelf)
+      const book = this.booksById[bookId]
+      this.pushEvent('voice', 'info', `${member.avatar} ${member.name} 在实体端发起存书 ·《${book.title}》`)
+      this.beginOcrStore(bookId, `${member.name} · 现场`)
+    }
+  }
+
+  private emitVoiceIntent(member: Member, book: BookInfo, cid: number): void {
+    const phrases = [
+      `小燕，帮我取《${book.title}》`,
+      `我想看《${book.title}》`,
+      `把《${book.title}》拿出来`,
+    ]
+    this.pushEvent('voice', 'info', `${member.avatar} ${member.name}：「${pick(phrases)}」`)
+    this.pushEvent('voice', 'info', `语音意图解析 take · 命中《${book.title}》 → 格口 ${cid}`)
+  }
+
+  /* ---------------- 指令入口 ---------------- */
+
+  setSelected(cid: number | null): void {
+    this.selectedCid = cid
+    this.emit()
+  }
+
+  setHovered(cid: number | null): void {
+    if (this.hoveredCid === cid) return
+    this.hoveredCid = cid
+    this.emit()
+  }
+
+  setAutonomous(on: boolean): void {
+    this.autonomous = on
+    this.pushEvent('system', 'info', on ? '自主活动仿真已开启 · 家庭成员行为将自动生成' : '自主活动仿真已暂停')
+    this.emit()
+  }
+
+  private startTask(action: TaskAction, cid: number, bookId: number, actor: string): void {
+    const comp = this.compartments.find((c) => c.cid === cid)
+    if (!comp || this.task) return
+    const book = this.booksById[bookId]
+    const now = performance.now()
+    const cmd = action === 'store' ? CMD_STORE : CMD_FETCH
+    this.registers = {
+      newCmdFlag: 1,
+      cmd,
+      floorId: comp.floor,
+      cellId: comp.cell - 1,
+      ack: ACK_PENDING,
+    }
+    this.task = {
+      id: `T${String(this.taskSeq++).padStart(3, '0')}`,
+      action,
+      cid,
+      floor: comp.floor,
+      cell: comp.cell,
+      bookId,
+      title: book?.title ?? '未知图书',
+      actor,
+      phase: 'dispatch',
+      phaseStart: now,
+      createdAt: Date.now(),
+    }
+    const cmdHex = `0x${cmd.toString(16).padStart(2, '0').toUpperCase()}`
+    this.pushEvent(
+      'motion',
+      'info',
+      `指令下发 CMD=${cmdHex} FLOOR=${comp.floor} CELL=${comp.cell - 1} · I2C 写入寄存器组`,
+    )
+    this.emit()
+  }
+
+  /** 指令台：模拟拍照存书（机器人送入大隔间，夹板夹紧后摄像头识别） */
+  commandCaptureStore(): void {
+    if (this.mode === 'live') {
+      this.pushEvent('system', 'warn', '联机模式请在实体端拍照存书')
+      this.emit()
+      return
+    }
+    this.autonomous = false
+    if (this.task || this.ocr) {
+      this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
+      this.emit()
+      return
+    }
+    const offShelf = this.snapshot.offShelfBookIds
+    if (offShelf.length === 0) {
+      this.pushEvent('system', 'warn', '书目中已没有可入库的图书')
+      this.emit()
+      return
+    }
+    const bookId = pick(offShelf)
+    this.beginOcrStore(bookId, '控制台')
+  }
+
+  /** 指令台：将指定图书存入指定格口 */
+  commandStoreTo(cid: number, bookId: number): void {
+    if (this.mode === 'live') return
+    this.autonomous = false
+    if (this.task || this.ocr) {
+      this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
+      this.emit()
+      return
+    }
+    const comp = this.compartments.find((c) => c.cid === cid)
+    if (!comp || comp.status !== 'free') return
+    this.beginOcrStore(bookId, '控制台', cid)
+  }
+
+  /** 图书资产页：指定图书入库（顺位分配格口） */
+  commandStoreBook(bookId: number): void {
+    if (this.mode === 'live') return
+    this.autonomous = false
+    if (this.task || this.ocr) {
+      this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
+      this.emit()
+      return
+    }
+    if (!this.snapshot.offShelfBookIds.includes(bookId)) return
+    this.beginOcrStore(bookId, '控制台')
+  }
+
+  /** 设备诊断页：模拟 pi_bridge 自检流程 */
+  commandSelfCheck(): void {
+    if (this.selfCheck) return
+    this.selfCheck = {
+      startedAt: performance.now(),
+      finishedAt: null,
+      stages: [
+        { at: 0, text: '自检开始 · 扫描 I2C 总线…', emitted: false, level: 'info' },
+        { at: 750, text: 'I2C 探测 0x30 应答正常 · 总线时钟 100kHz', emitted: false, level: 'ok' },
+        { at: 1500, text: '寄存器读写回环测试通过（5/5）', emitted: false, level: 'ok' },
+        { at: 2350, text: '横移 / 升降电机微动测试完成 · 编码器反馈一致', emitted: false, level: 'ok' },
+        { at: 3150, text: '温湿度传感器采样正常 · 摄像头帧率 30fps', emitted: false, level: 'ok' },
+        { at: 3900, text: 'UV 灯管 / 塑封热压辊通电检测通过', emitted: false, level: 'ok' },
+        { at: 4600, text: '自检完成 · 全部 6 项通过，系统健康', emitted: false, level: 'ok' },
+      ],
+    }
+    this.emit()
+  }
+
+  private beginOcrStore(bookId: number, actor: string, targetCid?: number): void {
+    const free = this.compartments.find((c) => c.status === 'free' && (targetCid === undefined || c.cid === targetCid))
+    if (!free) {
+      this.pushEvent('system', 'warn', '没有空闲格口，无法存书')
+      this.emit()
+      return
+    }
+    const book = this.booksById[bookId]
+    this.pushEvent('motion', 'info', `拍照存书 · 送书机器人将把《${book.title}》送入大隔间，夹紧后再拍照识别`)
+    this.startTask('store', free.cid, bookId, actor)
+  }
+
+  /** 夹板夹紧后，大隔间上方摄像头对书封拍照识别 */
+  private beginBayScan(task: MotionTask): void {
+    const book = this.booksById[task.bookId]
+    this.camera.status = 'running'
+    this.camera.startedAt = performance.now()
+    this.camera.duration = PHASE_MS.scan
+    this.ocr = {
+      bookId: task.bookId,
+      targetCid: task.cid,
+      actor: task.actor,
+      startedAt: performance.now(),
+      stages: [
+        { at: 0, text: '夹板已夹紧 · 摄像头对准书封', emitted: false },
+        { at: 450, text: '闪光灯触发 · 采集书封画面', emitted: false },
+        { at: 1100, text: 'YOLO ROI 检测 · 命中书名 / 作者区域', emitted: false },
+        { at: 1950, text: `PaddleOCR 识别 → 「${book.title}」「${book.author}」`, emitted: false },
+        { at: 2800, text: `图书匹配成功 · 分配 ${task.floor} 层 ${task.cell} 号格`, emitted: false },
+      ],
+    }
+  }
+
+  /** 指令台 / 格口面板：取书 */
+  commandTake(cid: number, actor = '控制台'): void {
+    if (this.task || this.ocr) {
+      this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
+      this.emit()
+      return
+    }
+    const meta = this.stored[cid]
+    if (!meta) return
+    if (this.mode === 'live') {
+      void this.liveTake(cid)
+      return
+    }
+    this.startTask('take', cid, meta.bookId, actor)
+  }
+
+  /** 指令台：按书名模糊取书（对应 /api/take_by_text） */
+  commandTakeByText(text: string): void {
+    const kw = text.replace(/[《》\s]/g, '').toLowerCase()
+    if (!kw) return
+    let best: { cid: number; bookId: number; score: number } | null = null
+    for (const [cidStr, meta] of Object.entries(this.stored)) {
+      const book = this.booksById[meta.bookId]
+      if (!book) continue
+      const title = book.title.toLowerCase()
+      let score = 0
+      if (title === kw) score = 100
+      else if (title.includes(kw) || kw.includes(title)) score = 80
+      else {
+        const hits = [...kw].filter((ch) => title.includes(ch)).length
+        score = (hits / Math.max(kw.length, 1)) * 60
+      }
+      if (score > 40 && (!best || score > best.score)) {
+        best = { cid: Number(cidStr), bookId: meta.bookId, score }
+      }
+    }
+    if (!best) {
+      this.pushEvent('take', 'warn', `未在书架上找到与「${text}」匹配的图书`)
+      this.emit()
+      return
+    }
+    const book = this.booksById[best.bookId]
+    this.pushEvent('take', 'info', `模糊匹配「${text}」 → 《${book.title}》（格口 ${best.cid}）`)
+    this.commandTake(best.cid)
+  }
+
+  commandUv(): void {
+    if (this.uv.status === 'running') return
+    this.uv = { status: 'running', startedAt: performance.now(), duration: UV_DURATION }
+    this.pushEvent('uv', 'info', '紫外线消毒模块已启动 · 灯管功率 36W · 预计 6s')
+    this.emit()
+  }
+
+  commandLaminate(): void {
+    if (this.laminate.status === 'running') return
+    this.laminatePresented = false
+    this.laminateBookId = this.pickLaminateBook()
+    this.laminate = { status: 'running', startedAt: performance.now(), duration: LAMINATE_DURATION }
+    const book = this.laminateBookId !== null ? this.booksById[this.laminateBookId] : null
+    this.pushEvent(
+      'laminate',
+      'info',
+      book
+        ? `柜底塑封抽屉启动 · 《${book.title}》从正面入口送入，沿加热片走完整本`
+        : '柜底塑封抽屉启动 · 加热片升温中',
+    )
+    this.emit()
+  }
+
+  private pickLaminateBook(): number | null {
+    const busyId =
+      this.task && this.task.phase !== 'done' && this.task.phase !== 'fault' ? this.task.bookId : null
+    const storedIds = new Set(Object.values(this.stored).map((s) => s.bookId))
+    const offShelf = Object.values(this.booksById).filter((b) => !storedIds.has(b.id) && b.id !== busyId)
+    if (offShelf.length > 0) return offShelf[0].id
+    const onShelf = this.compartments
+      .map((c) => c.bookId)
+      .filter((id): id is number => id !== null && id !== busyId)
+    return onShelf[0] ?? Object.values(this.booksById)[0]?.id ?? null
+  }
+
+  /** 急停：中断任务与 OCR，ACK 置 FAULT */
+  commandEmergencyStop(): void {
+    const hadWork = Boolean(this.task || this.ocr)
+    if (this.ocr) {
+      this.ocr = null
+      this.camera.status = 'idle'
+    }
+    if (this.task && this.task.phase !== 'done' && this.task.phase !== 'fault') {
+      const now = performance.now()
+      this.task.phase = 'fault'
+      this.task.phaseStart = now
+      this.registers.ack = ACK_FAULT
+      this.registers.newCmdFlag = 0
+      const pose = this.sampleGantry(now)
+      this.gantrySeg = {
+        fromX: pose.x,
+        fromY: pose.y,
+        fromZ: pose.z,
+        toX: GANTRY_HOME.x,
+        toY: GANTRY_HOME.y,
+        toZ: HEAD_REST.z,
+        start: now,
+        dur: PHASE_MS.fault,
+      }
+    }
+    if (hadWork) {
+        this.pushEvent('motion', 'warn', '急停触发 · ACK=0x03 (FAULT) · 机构返回第二层左侧大隔间')
+    } else {
+      this.pushEvent('system', 'info', '急停检查 · 当前无执行中任务')
+    }
+    this.emit()
+  }
+
+  /* ---------------- 联机模式 ---------------- */
+
+  private liveLatency = 0
+
+  async enterLive(): Promise<void> {
+    if (this.mode === 'live') return
+    this.pushEvent('link', 'info', `正在探测实体书架服务 ${this.apiBase || '(同源 /api)'} ...`)
+    this.emit()
+    const ok = await this.pollLive(true)
+    if (!ok) {
+      this.pushEvent('link', 'warn', '联机失败 · Flask 服务不可达，保持仿真模式')
+      this.emit()
+      return
+    }
+    this.simBackup = {
+      compartments: this.compartments.map((c) => ({ ...c })),
+      stored: { ...this.stored },
+      booksById: { ...this.booksById },
+      weeklyTrend: this.weeklyTrend.map((d) => ({ ...d })),
+      memberActivity: { ...this.memberActivity },
+      bookActivity: { ...this.bookActivity },
+      cellActivity: { ...this.cellActivity },
+      storeCount: this.stats.storeCount,
+      takeCount: this.stats.takeCount,
+    }
+    this.mode = 'live'
+    this.autonomous = false
+    this.pushEvent('link', 'ok', '已联机 · 孪生体与实体书架数据同步中')
+    this.restartPoll(3000)
+    this.connectStream()
+    void this.loadLiveStats()
+    this.startClimatePolling()
+    this.emit()
+  }
+
+  exitLive(): void {
+    if (this.mode !== 'live') return
+    if (this.pollTimer !== null) {
+      window.clearInterval(this.pollTimer)
+      this.pollTimer = null
+    }
+    this.disconnectStream()
+    this.stopClimatePolling()
+    this.mode = 'sim'
+    this.liveHealthy = false
+    if (this.simBackup) {
+      this.compartments = this.simBackup.compartments
+      this.stored = this.simBackup.stored
+      this.booksById = this.simBackup.booksById
+      this.weeklyTrend = this.simBackup.weeklyTrend
+      this.memberActivity = this.simBackup.memberActivity
+      this.bookActivity = this.simBackup.bookActivity
+      this.cellActivity = this.simBackup.cellActivity
+      this.stats.storeCount = this.simBackup.storeCount
+      this.stats.takeCount = this.simBackup.takeCount
+      this.simBackup = null
+    }
+    this.pushEvent('link', 'info', '已断开联机 · 回到仿真模式')
+    this.emit()
+  }
+
+  /* ---------------- 实体温湿度遥测 ---------------- */
+
+  private startClimatePolling(): void {
+    if (this.climateTimer !== null) return
+    const fetchClimate = async () => {
+      try {
+        const res = await fetch(`${this.apiBase}/api/climate?t=${Date.now()}`, { cache: 'no-store' })
+        if (!res.ok) return
+        const envelope = (await res.json()) as { ok: boolean; data?: DeviceClimate }
+        const climate = envelope.data
+        if (!climate || !Number.isFinite(climate.temperature) || !Number.isFinite(climate.humidity)) return
+        const first = this.liveClimate === null
+        this.liveClimate = climate
+        if (first) {
+          const sourceLabel =
+            climate.source === 'sensor' ? '柜内传感器' : climate.source === 'estimated' ? '天气耦合估算' : '缓存'
+          this.pushEvent('link', 'ok', `实体温湿度遥测已接入（${sourceLabel}）· ${climate.temperature}°C / ${climate.humidity}%`)
+          this.emit()
+        }
+      } catch {
+        // 拉取失败保持最近一次遥测值，tickTelemetry 继续平滑
+      }
+    }
+    void fetchClimate()
+    this.climateTimer = window.setInterval(() => void fetchClimate(), 30000)
+  }
+
+  private stopClimatePolling(): void {
+    if (this.climateTimer !== null) {
+      window.clearInterval(this.climateTimer)
+      this.climateTimer = null
+    }
+    this.liveClimate = null
+  }
+
+  /** 联机时拉取实体 borrow_logs，把周趋势 / 成员活跃 / 格口热度换成真实数据 */
+  private async loadLiveStats(): Promise<void> {
+    try {
+      const res = await fetch(`${this.apiBase}/api/borrow_logs?since_id=0&limit=500`)
+      if (!res.ok) return
+      const envelope = (await res.json()) as { ok: boolean; data?: DeviceBorrowLog[] }
+      const logs = Array.isArray(envelope.data) ? envelope.data : []
+      if (this.mode !== 'live' || logs.length === 0) return
+
+      const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+      const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+      const now = new Date()
+      const buckets = new Map<string, { label: string; store: number; take: number }>()
+      for (let i = 6; i >= 0; i--) {
+        const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
+        buckets.set(dayKey(day), { label: i === 0 ? '今天' : dayNames[day.getDay()], store: 0, take: 0 })
+      }
+
+      const memberActivity: Record<string, number> = {}
+      const cellActivity: Record<number, number> = {}
+      const bookActivity: Record<number, number> = {}
+      const titleToId = new Map<string, number>()
+      Object.values(this.booksById).forEach((b) => titleToId.set(b.title, b.id))
+
+      for (const log of logs) {
+        // SQLite CURRENT_TIMESTAMP 是 UTC，补 Z 转本地
+        const at = log.action_time ? new Date(log.action_time.replace(' ', 'T') + 'Z') : null
+        if (at && !Number.isNaN(at.getTime())) {
+          const bucket = buckets.get(dayKey(at))
+          if (bucket) {
+            if (log.action === 'store') bucket.store++
+            else bucket.take++
+          }
+        }
+        if (log.user_name) memberActivity[log.user_name] = (memberActivity[log.user_name] ?? 0) + 1
+        if (log.compartment_id != null) cellActivity[log.compartment_id] = (cellActivity[log.compartment_id] ?? 0) + 1
+        const bookId = log.title ? titleToId.get(log.title) : undefined
+        if (bookId !== undefined) bookActivity[bookId] = (bookActivity[bookId] ?? 0) + 1
+      }
+
+      const days = [...buckets.values()]
+      const today = days[days.length - 1]
+      this.weeklyTrend = days.slice(0, -1)
+      this.stats.storeCount = today?.store ?? 0
+      this.stats.takeCount = today?.take ?? 0
+      this.memberActivity = memberActivity
+      this.cellActivity = cellActivity
+      this.bookActivity = bookActivity
+      this.pushEvent('link', 'ok', `实体运行统计已接入 · ${logs.length} 条真实存取记录`)
+      this.emit()
+    } catch {
+      // 拉取失败保留模拟统计
+    }
+  }
+
+  /* ---------------- SSE 事件流（/api/voice_stream 直通） ---------------- */
+
+  private restartPoll(intervalMs: number): void {
+    if (this.pollTimer !== null) window.clearInterval(this.pollTimer)
+    this.pollTimer = window.setInterval(() => void this.pollLive(false), intervalMs)
+  }
+
+  private connectStream(): void {
+    if (this.sse) return
+    const source = new EventSource(`${this.apiBase}/api/voice_stream?since=now`)
+    this.sse = source
+    source.onmessage = (msg) => this.handleStreamEvent(String(msg.data ?? ''))
+    source.onerror = () => {
+      if (this.sseHealthy) {
+        this.sseHealthy = false
+        // SSE 断开时退回 3s 快轮询兜底，浏览器会自动重连 SSE
+        if (this.mode === 'live') this.restartPoll(3000)
+        this.pushEvent('link', 'warn', 'SSE 事件流中断 · 自动重连中，暂以快轮询兜底')
+        this.emit()
+      }
+    }
+  }
+
+  private disconnectStream(): void {
+    if (this.sse) {
+      this.sse.close()
+      this.sse = null
+    }
+    this.sseHealthy = false
+  }
+
+  private handleStreamEvent(raw: string): void {
+    let data: StreamPayload
+    try {
+      data = JSON.parse(raw) as StreamPayload
+    } catch {
+      return
+    }
+
+    if (data.type === 'connected') {
+      this.sseHealthy = true
+      // 事件改走 SSE 直通，轮询降为慢速对账通道
+      if (this.mode === 'live') this.restartPoll(12000)
+      this.pushEvent('link', 'ok', 'SSE 事件流已接通 · 实体语音/存取事件实时直通（轮询降为 12s 对账）')
+      this.emit()
+      return
+    }
+
+    if (data.source === 'shelf_watch' && (data.action === 'store' || data.action === 'take')) {
+      this.handleShelfWatchEvent(data)
+      return
+    }
+
+    if (data.role && data.text) {
+      const speaker = data.role === 'user' ? '实体端用户' : '小燕'
+      const text = data.text.length > 80 ? `${data.text.slice(0, 80)}…` : data.text
+      this.pushEvent('voice', 'info', `${speaker}：「${text}」`)
+      this.emit()
+    }
+  }
+
+  /** 实体存取事件直通：写事件流 + 驱动机械臂动画，再拉快照对账 */
+  private handleShelfWatchEvent(data: StreamPayload): void {
+    const action = data.action as TaskAction
+    const cid = Number(data.cid)
+    const title = data.title || '未知图书'
+
+    this.pushEvent(
+      action,
+      'ok',
+      action === 'store'
+        ? `实体书架存书 ·《${title}》 → 格口 ${Number.isFinite(cid) ? cid : '?'}`
+        : `实体书架取书 ·《${title}》 ← 格口 ${Number.isFinite(cid) ? cid : '?'}`,
+    )
+
+    if (Number.isFinite(cid) && !this.task) {
+      const comp = this.compartments.find((c) => c.cid === cid)
+      if (comp) {
+        let bookId: number | null = null
+        if (action === 'take') {
+          bookId = this.stored[cid]?.bookId ?? null
+        }
+        if (bookId === null) {
+          const known = Object.values(this.booksById).find((b) => b.title === title)
+          if (known) {
+            bookId = known.id
+          } else {
+            bookId = 900 + cid
+            this.booksById[bookId] = {
+              id: bookId,
+              title,
+              author: '—',
+              category: '未知',
+              description: '来自实体书架的图书',
+            }
+          }
+        }
+        this.startTask(action, cid, bookId, '实体书架 · 直通')
+      }
+    }
+
+    void this.pollLive(false)
+    this.emit()
+  }
+
+  private async pollLive(probe: boolean): Promise<boolean> {
+    const url = `${this.apiBase}/api/compartments`
+    const started = performance.now()
+    try {
+      const ctrl = new AbortController()
+      const timeout = window.setTimeout(() => ctrl.abort(), 2500)
+      const res = await fetch(url, { signal: ctrl.signal })
+      window.clearTimeout(timeout)
+      if (!res.ok) throw new Error(String(res.status))
+      const data = (await res.json()) as Array<{
+        cid: number
+        x: number
+        y: number
+        status: string
+        book: string | null
+      }>
+      this.liveLatency = Math.max(1, Math.round(performance.now() - started))
+      const wasHealthy = this.liveHealthy
+      this.liveHealthy = true
+      this.applyLiveSnapshot(data)
+      if (!probe && !wasHealthy) this.pushEvent('link', 'ok', '实体书架链路恢复')
+      this.emit()
+      return true
+    } catch {
+      if (this.liveHealthy) {
+        this.pushEvent('link', 'warn', '实体书架轮询失败 · 显示最近一次快照')
+      }
+      this.liveHealthy = false
+      if (!probe) this.emit()
+      return false
+    }
+  }
+
+  private applyLiveSnapshot(
+    data: Array<{ cid: number; x: number; y: number; status: string; book: string | null }>,
+  ): void {
+    // 正在被任务动画操作的格口保持本地状态，动画结束后由下一次对账同步
+    const animatingCid = this.task && this.task.phase !== 'done' && this.task.phase !== 'fault' ? this.task.cid : null
+    const stored: Record<number, StoredMeta> = {}
+    const comps: Compartment[] = []
+    for (const item of data) {
+      if (animatingCid !== null && item.cid === animatingCid) {
+        const local = this.compartments.find((c) => c.cid === item.cid)
+        if (local) {
+          comps.push({ ...local })
+          if (this.stored[item.cid]) stored[item.cid] = { ...this.stored[item.cid] }
+          continue
+        }
+      }
+      const occupied = item.status === 'occupied'
+      let bookId: number | null = null
+      if (occupied && item.book) {
+        const known = Object.values(this.booksById).find((b) => b.title === item.book)
+        if (known) {
+          bookId = known.id
+        } else {
+          bookId = 900 + item.cid
+          this.booksById[bookId] = {
+            id: bookId,
+            title: item.book,
+            author: '—',
+            category: '未知',
+            description: '来自实体书架的图书',
+          }
+        }
+        stored[item.cid] = { bookId, storedAt: null, storedBy: '实体书架' }
+      }
+      comps.push({
+        cid: item.cid,
+        floor: item.x,
+        cell: item.y,
+        status: occupied ? 'occupied' : 'free',
+        bookId,
+      })
+    }
+    comps.sort((a, b) => a.cid - b.cid)
+    this.compartments = comps
+    this.stored = stored
+  }
+
+  private async liveTake(cid: number): Promise<void> {
+    const meta = this.stored[cid]
+    const book = meta ? this.booksById[meta.bookId] : null
+    this.pushEvent('take', 'info', `联机取书 · POST /api/take {cid: ${cid}}`)
+    this.startTask('take', cid, meta?.bookId ?? 0, '控制台 · 联机')
+    try {
+      // 两段式：先 /api/take 准备动作，拿到 commit_request 再 /api/motion/commit 落库
+      const prepareRes = await fetch(`${this.apiBase}/api/take`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cid, title: book?.title ?? '' }),
+      })
+      const prepareEnvelope = (await prepareRes.json()) as {
+        ok: boolean
+        message?: string
+        data?: { msg?: string; commit_request?: Record<string, unknown> }
+      }
+      const commitRequest = prepareEnvelope.data?.commit_request
+      if (!prepareEnvelope.ok || !commitRequest) {
+        this.pushEvent(
+          'take',
+          'warn',
+          `实体书架拒绝取书：${prepareEnvelope.message ?? prepareEnvelope.data?.msg ?? '未知原因'}`,
+        )
+        void this.pollLive(false)
+        return
+      }
+      const commitRes = await fetch(`${this.apiBase}/api/motion/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(commitRequest),
+      })
+      const commitEnvelope = (await commitRes.json()) as {
+        ok: boolean
+        message?: string
+        data?: { msg?: string }
+      }
+      if (commitEnvelope.ok) {
+        this.pushEvent('take', 'ok', `实体书架已完成取书：${commitEnvelope.data?.msg ?? 'ok'}`)
+      } else {
+        this.pushEvent(
+          'take',
+          'warn',
+          `实体书架取书提交失败：${commitEnvelope.message ?? commitEnvelope.data?.msg ?? '未知原因'}`,
+        )
+      }
+    } catch {
+      this.pushEvent('take', 'warn', '联机取书请求失败 · 请检查 Flask 服务')
+    }
+    void this.pollLive(false)
+  }
+
+  /* ---------------- 3D 采样（每帧调用，不经过 React） ---------------- */
+
+  /** 当前书在哪个机构上；flight = 两个机构之间的过渡 */
+  sampleBookCarrier(now: number): BookCarrier | null {
+    const task = this.task
+    if (!task || task.phase === 'fault') return null
+    const p = taskPhaseProgress(task, now)
+    if (task.action === 'store') {
+      if (task.phase === 'dispatch' || task.phase === 'ack') return 'cart'
+      if (task.phase === 'deliver') {
+        if (p < 0.36) return 'cart'
+        if (p < 0.6) return 'flight'
+        return 'bay'
+      }
+      if (task.phase === 'scan') return 'bay'
+      if (task.phase === 'handoff') {
+        if (p < 0.5) return 'bay'
+        if (p < 0.64) return 'flight'
+        return 'gantry'
+      }
+      if (task.phase === 'lift' || task.phase === 'traverse') return 'gantry'
+      if (task.phase === 'operate') {
+        if (p < 0.42) return 'gantry'
+        if (p < 0.58) return 'flight'
+        return 'slot'
+      }
+      if (task.phase === 'retract' || task.phase === 'return' || task.phase === 'done') return 'slot'
+      return null
+    }
+    if (task.phase === 'dispatch' || task.phase === 'ack' || task.phase === 'lift' || task.phase === 'traverse') {
+      return 'slot'
+    }
+    if (task.phase === 'operate') {
+      if (p < 0.34) return 'slot'
+      if (p < 0.48) return 'flight'
+      return 'gantry'
+    }
+    if (task.phase === 'retract' || task.phase === 'return') return 'gantry'
+    if (task.phase === 'handoff') {
+      if (p < 0.12) return 'gantry'
+      if (p < 0.32) return 'flight'
+      if (p < 0.78) return 'bay'
+      if (p < 0.94) return 'flight'
+      return 'cart'
+    }
+    if (task.phase === 'done') return 'cart'
+    return null
+  }
+
+  sampleBookFlight(now: number): BookFlight {
+    const idle: BookFlight = { active: false, bookId: null, x: 0, y: 0, z: 0, t: 0 }
+    const task = this.task
+    if (!task || task.phase === 'fault') return idle
+    if (this.sampleBookCarrier(now) !== 'flight') return idle
+    const p = taskPhaseProgress(task, now)
+    const slotX = cellX(task.cell)
+    const slotY = cellY(task.floor)
+
+    let from = { x: 0, y: 0, z: 0 }
+    let to = { x: 0, y: 0, z: 0 }
+    let t = 0
+
+    if (task.action === 'store' && task.phase === 'deliver') {
+      t = clamp01((p - 0.36) / 0.24)
+      from = robotHeldBookWorld(1)
+      to = bayHeldBookWorld(BAY_REAR_Z)
+    } else if (task.action === 'store' && task.phase === 'handoff') {
+      t = clamp01((p - 0.5) / 0.14)
+      from = bayHeldBookWorld(BAY_MOUTH_Z)
+      to = gantryHeldBookWorld(GANTRY_HOME.x, GANTRY_HOME.y, GANTRY_TIP_SHIFT_Z)
+    } else if (task.action === 'store' && task.phase === 'operate') {
+      t = clamp01((p - 0.42) / 0.16)
+      from = gantryHeldBookWorld(slotX, slotY, GANTRY_TIP_SHIFT_Z)
+      to = slotHeldBookWorld(task.floor, task.cell, SLOT_MOUTH_LOCAL_Z)
+    } else if (task.action === 'take' && task.phase === 'operate') {
+      t = clamp01((p - 0.34) / 0.14)
+      from = slotHeldBookWorld(task.floor, task.cell, SLOT_MOUTH_LOCAL_Z)
+      to = gantryHeldBookWorld(slotX, slotY, GANTRY_TIP_SHIFT_Z)
+    } else if (task.action === 'take' && task.phase === 'handoff' && p < 0.32) {
+      t = clamp01((p - 0.12) / 0.2)
+      from = gantryHeldBookWorld(GANTRY_HOME.x, GANTRY_HOME.y, GANTRY_TIP_SHIFT_Z)
+      to = bayHeldBookWorld(BAY_MOUTH_Z)
+    } else if (task.action === 'take' && task.phase === 'handoff') {
+      t = clamp01((p - 0.78) / 0.16)
+      from = bayHeldBookWorld(BAY_REAR_Z)
+      to = robotHeldBookWorld(1)
+    } else {
+      return idle
+    }
+
+    const pos = lerpVec3(from, to, t)
+    return { active: true, bookId: task.bookId, x: pos.x, y: pos.y, z: pos.z, t }
+  }
+
+  sampleLaminate(now: number): LaminatePose {
+    const mod = this.laminate
+    const running = mod.status === 'running'
+    const done = mod.status === 'done'
+    const presenting = this.laminatePresented && this.laminateBookId !== null && !running
+    const progress = running ? clamp01((now - mod.startedAt) / Math.max(mod.duration, 1)) : presenting || done ? 1 : 0
+    const sealed = running ? clamp01((progress - 0.05) / 0.6) : presenting || done ? 1 : 0
+    const book = laminateBookWorld(progress)
+    const heat = running ? 0.28 + 0.72 * Math.sin(Math.min(progress, 0.7) / 0.7 * Math.PI) : 0.06
+    return {
+      progress,
+      running,
+      active: running || done || presenting,
+      presenting,
+      bookId: running || done || presenting ? this.laminateBookId : null,
+      x: book.x,
+      y: book.y,
+      z: book.z,
+      belt: running && progress < 0.98 ? 1 : 0,
+      heat,
+      sealed,
+    }
+  }
+
+  sampleGantry(now: number): GantryPose {
+    const seg = this.gantrySeg
+    const t = seg.dur <= 0 ? 1 : clamp01((now - seg.start) / seg.dur)
+    const k = easeInOut(t)
+    const x = seg.fromX + (seg.toX - seg.fromX) * k
+    const y = seg.fromY + (seg.toY - seg.fromY) * k
+    const z = seg.fromZ + (seg.toZ - seg.fromZ) * k
+
+    let carrying = false
+    let swing = GANTRY_SWING_IDLE
+    let squeeze = false
+    let carryBookId: number | null = null
+    let bookShiftZ = 0
+    let belt = 0
+    const task = this.task
+    if (task && task.phase !== 'fault') {
+      carryBookId = task.bookId
+      const p = taskPhaseProgress(task, now)
+      const onGantry = this.sampleBookCarrier(now) === 'gantry'
+      carrying = onGantry
+      if (task.action === 'store') {
+        if (task.phase === 'deliver' || task.phase === 'scan') {
+          swing = GANTRY_SWING_RECEIVE
+        } else if (task.phase === 'handoff') {
+          if (!onGantry) {
+            swing = GANTRY_SWING_RECEIVE
+          } else if (p < 0.74) {
+            // 书停在爪尖，尖端先合拢夹住
+            swing = -GANTRY_TIP_CLAMP_SWING
+            bookShiftZ = GANTRY_TIP_SHIFT_Z
+          } else if (p < 0.94) {
+            // 内履带把书往后送，两爪保持合拢贴着书
+            const u = easeInOut((p - 0.74) / 0.2)
+            swing = -GANTRY_TIP_CLAMP_SWING
+            bookShiftZ = GANTRY_TIP_SHIFT_Z * (1 - u)
+            belt = 1
+          } else {
+            // 书到爪根，爪尖完全并拢 + 爪垫压紧，夹取完成
+            swing = -GANTRY_CARRY_SWING
+            squeeze = true
+          }
+        } else if (task.phase === 'lift' || task.phase === 'traverse') {
+          swing = onGantry ? -GANTRY_CARRY_SWING : GANTRY_SWING_IDLE
+          squeeze = onGantry
+        } else if (task.phase === 'operate' && onGantry) {
+          if (p < 0.06) {
+            swing = -GANTRY_CARRY_SWING
+            squeeze = true
+          } else {
+            // 放书：张开，内履带把书送向爪尖，惯性滑出
+            swing = GANTRY_SWING_GUIDE
+            bookShiftZ = GANTRY_TIP_SHIFT_Z * easeInOut(clamp01((p - 0.06) / 0.34))
+            belt = -1
+          }
+        }
+      } else if (task.action === 'take') {
+        if (task.phase === 'operate') {
+          if (!onGantry) {
+            swing = GANTRY_SWING_RECEIVE
+          } else if (p < 0.56) {
+            swing = -GANTRY_TIP_CLAMP_SWING
+            bookShiftZ = GANTRY_TIP_SHIFT_Z
+          } else if (p < 0.8) {
+            const u = easeInOut((p - 0.56) / 0.24)
+            swing = -GANTRY_TIP_CLAMP_SWING
+            bookShiftZ = GANTRY_TIP_SHIFT_Z * (1 - u)
+            belt = 1
+          } else {
+            swing = -GANTRY_CARRY_SWING
+            squeeze = true
+          }
+        } else if (task.phase === 'retract' || task.phase === 'return') {
+          swing = onGantry ? -GANTRY_CARRY_SWING : GANTRY_SWING_IDLE
+          squeeze = onGantry
+        } else if (task.phase === 'handoff') {
+          if (onGantry) {
+            if (p < 0.02) {
+              swing = -GANTRY_CARRY_SWING
+              squeeze = true
+            } else {
+              swing = GANTRY_SWING_GUIDE
+              bookShiftZ = GANTRY_TIP_SHIFT_Z * easeInOut(clamp01((p - 0.02) / 0.1))
+              belt = -1
+            }
+          } else {
+            swing = GANTRY_SWING_RECEIVE
+          }
+        }
+      }
+    }
+    return { x, y, z, carrying, swing, squeeze, carryBookId, moving: t < 1, bookShiftZ, belt }
+  }
+
+  sampleBay(now: number): BayPose {
+    const idle = { clamp: 0.08, bookVisible: false, bookId: null, bookLocalZ: BAY_PARK_Z, belt: 0, scanFlash: 0 }
+    const task = this.task
+    if (!task || task.phase === 'fault') return idle
+    const p = taskPhaseProgress(task, now)
+    const bookId = task.bookId
+    const visible = this.sampleBookCarrier(now) === 'bay'
+
+    if (task.action === 'store') {
+      if (task.phase === 'deliver') {
+        const inward = easeInOut(clamp01((p - 0.6) / 0.22))
+        const clamp = p < 0.72 ? 0.08 : easeInOut(clamp01((p - 0.72) / 0.24))
+        return {
+          clamp,
+          bookVisible: visible,
+          bookId,
+          bookLocalZ: BAY_REAR_Z + (BAY_PARK_Z - BAY_REAR_Z) * inward,
+          belt: visible && inward < 1 ? 1 : 0,
+          scanFlash: 0,
+        }
+      }
+      if (task.phase === 'scan') {
+        const flash = p > 0.12 && p < 0.28 ? Math.sin(((p - 0.12) / 0.16) * Math.PI) : 0
+        return {
+          clamp: 1,
+          bookVisible: true,
+          bookId,
+          bookLocalZ: BAY_PARK_Z,
+          belt: 0,
+          scanFlash: flash,
+        }
+      }
+      if (task.phase === 'handoff') {
+        // 先松夹板，再由履带把书送往槽口交给夹爪
+        const out = easeInOut(clamp01((p - 0.1) / 0.38))
+        const clamp = p < 0.06 ? 1 : 1 - easeInOut(clamp01((p - 0.06) / 0.16))
+        return {
+          clamp,
+          bookVisible: visible,
+          bookId,
+          bookLocalZ: BAY_PARK_Z + (BAY_MOUTH_Z - BAY_PARK_Z) * out,
+          belt: visible && out < 1 ? 1 : 0,
+          scanFlash: 0,
+        }
+      }
+    } else if (task.action === 'take' && task.phase === 'handoff') {
+      // 履带收书 → 夹板从宽到窄合拢固定 → 顿一下 → 松开 → 履带送柜后交机器人
+      let localZ = BAY_MOUTH_Z
+      let clamp = 0.08
+      let belt = 0
+      if (p < 0.46) {
+        const inward = easeInOut(clamp01((p - 0.32) / 0.14))
+        localZ = BAY_MOUTH_Z + (BAY_PARK_Z - BAY_MOUTH_Z) * inward
+        belt = visible ? -1 : 0
+      } else if (p < 0.68) {
+        localZ = BAY_PARK_Z
+        clamp = easeInOut(clamp01((p - 0.46) / 0.16))
+      } else {
+        const out = easeInOut(clamp01((p - 0.72) / 0.06))
+        localZ = BAY_PARK_Z + (BAY_REAR_Z - BAY_PARK_Z) * out
+        clamp = 1 - easeInOut(clamp01((p - 0.68) / 0.08))
+        belt = visible && p >= 0.72 ? -1 : 0
+      }
+      return { clamp, bookVisible: visible, bookId, bookLocalZ: localZ, belt, scanFlash: 0 }
+    }
+    return idle
+  }
+
+  sampleCart(now: number): CartPose {
+    const dockYaw = 0
+    const leaveLane = [...CART_LANE_TO_DOCK].reverse()
+    const task = this.task
+
+    const patrol = (): CartPose => {
+      const t = now / 7800
+      return {
+        x: CART_HOME.x + Math.sin(t) * 0.22,
+        z: CART_HOME.z + Math.cos(t) * 0.16,
+        yaw: t,
+        mast: 0.08,
+        reach: 0,
+        carrying: false,
+        clamped: false,
+        carryBookId: null,
+        moving: true,
+      }
+    }
+
+    if (!task || task.phase === 'fault') return patrol()
+
+    const p = taskPhaseProgress(task, now)
+    const bookId = task.bookId
+
+    if (task.action === 'store') {
+      if (task.phase === 'done') return patrol()
+      if (task.phase === 'dispatch' || task.phase === 'ack') {
+        const k = task.phase === 'dispatch' ? 0.5 * p : 0.5 + 0.5 * p
+        const pos = lerpPath(CART_LANE_TO_DOCK, easeInOut(k))
+        const arrived = k > 0.97
+        return {
+          x: arrived ? CART_DOCK.x : pos.x,
+          z: arrived ? CART_DOCK.z : pos.z,
+          yaw: arrived ? dockYaw : pos.yaw,
+          mast: 0.2 + 0.35 * k,
+          reach: 0,
+          carrying: true,
+          clamped: true,
+          carryBookId: bookId,
+          moving: !arrived,
+        }
+      }
+      if (task.phase === 'deliver') {
+        const reach =
+          p < 0.12
+            ? 0
+            : p < 0.36
+              ? easeInOut((p - 0.12) / 0.24)
+              : p < 0.42
+                ? 1
+                : p < 0.64
+                  ? 1 - easeInOut((p - 0.42) / 0.22)
+                  : 0
+        return {
+          x: CART_DOCK.x,
+          z: CART_DOCK.z,
+          yaw: dockYaw,
+          mast: 1,
+          reach,
+          carrying: this.sampleBookCarrier(now) === 'cart',
+          // 臂到位后先松爪，书再凭惯性滑进隔间
+          clamped: p < 0.3,
+          carryBookId: bookId,
+          moving: false,
+        }
+      }
+      if (task.phase === 'scan' || task.phase === 'handoff') {
+        return {
+          x: CART_DOCK.x,
+          z: CART_DOCK.z,
+          yaw: dockYaw,
+          mast: 0.18,
+          reach: 0,
+          carrying: false,
+          clamped: false,
+          carryBookId: null,
+          moving: false,
+        }
+      }
+      const leaveT = task.phase === 'lift' ? easeInOut(p) : 1
+      const pos = lerpPath(leaveLane, leaveT)
+      return {
+        x: pos.x,
+        z: pos.z,
+        yaw: pos.yaw,
+        mast: 0.08,
+        reach: 0,
+        carrying: false,
+        clamped: false,
+        carryBookId: null,
+        moving: leaveT < 1,
+      }
+    }
+
+    if (['dispatch', 'ack', 'lift', 'traverse', 'operate', 'retract', 'return'].includes(task.phase)) {
+      const order = ['dispatch', 'ack', 'lift', 'traverse', 'operate', 'retract', 'return']
+      const idx = Math.max(0, order.indexOf(task.phase))
+      const k = clamp01((idx + p) / 6.2)
+      const pos = lerpPath(CART_LANE_TO_DOCK, easeInOut(k))
+      const atDock = k > 0.88
+      return {
+        x: atDock ? CART_DOCK.x : pos.x,
+        z: atDock ? CART_DOCK.z : pos.z,
+        yaw: atDock ? dockYaw : pos.yaw,
+        mast: atDock ? 0.45 + 0.55 * clamp01((k - 0.88) / 0.12) : 0.1,
+        reach: 0,
+        carrying: false,
+        clamped: false,
+        carryBookId: null,
+        moving: k < 1,
+      }
+    }
+    if (task.phase === 'handoff') {
+      const onCart = this.sampleBookCarrier(now) === 'cart'
+      const leaveT = p < 0.94 ? 0 : easeInOut((p - 0.94) / 0.06)
+      const pos = lerpPath(leaveLane, leaveT)
+      const reach =
+        p < 0.7
+          ? 0
+          : p < 0.78
+            ? easeInOut((p - 0.7) / 0.08)
+            : p < 0.94
+              ? 1
+              : Math.max(0, 1 - easeInOut((p - 0.94) / 0.06))
+      return {
+        x: p < 0.94 ? CART_DOCK.x : pos.x,
+        z: p < 0.94 ? CART_DOCK.z : pos.z,
+        yaw: p < 0.94 ? dockYaw : pos.yaw,
+        mast: p < 0.94 ? 1 : 0.12,
+        reach,
+        carrying: onCart,
+        // 书滑进钳口落稳后再合爪
+        clamped: p >= 0.96,
+        carryBookId: bookId,
+        moving: p >= 0.94,
+      }
+    }
+    if (task.phase === 'done') {
+      const pos = lerpPath(leaveLane, 1)
+      return {
+        x: pos.x,
+        z: pos.z,
+        yaw: pos.yaw,
+        mast: 0.08,
+        reach: 0,
+        carrying: true,
+        clamped: true,
+        carryBookId: bookId,
+        moving: false,
+      }
+    }
+    return patrol()
+  }
+}
+
+export const twinEngine = new TwinEngine()
+twinEngine.start()
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => twinEngine.dispose())
+}
