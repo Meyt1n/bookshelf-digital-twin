@@ -734,6 +734,12 @@ export class TwinEngine {
     this.emit()
   }
 
+  /** 演示剧本等编排层写入事件流（各幕进度对观众可见） */
+  noteScriptEvent(text: string, level: EventLevel = 'info'): void {
+    this.pushEvent('system', level, text)
+    this.emit()
+  }
+
   private startTask(action: TaskAction, cid: number, bookId: number, actor: string): void {
     const comp = this.compartments.find((c) => c.cid === cid)
     if (!comp || this.task) return
