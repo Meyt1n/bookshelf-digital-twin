@@ -48,3 +48,10 @@ R3F scene (scene/) ← useFrame reads twinEngine.sample*
 
 - 纯逻辑：`npm test`（Vitest：`layout` / `format` / `liveApi` / `cameraPresets`）
 - CI：`.github/workflows/ci.yml` → `npm ci` + lint + test + build
+  - push 仅在 `main` 触发；分支验证走 pull_request 事件（避免 push + PR 双跑计费翻倍）
+  - `concurrency` 取消同分支旧 run；`timeout-minutes: 10` 兜底
+  - **已知限制**：仓库为私有，Actions 按分钟计费。历史上所有 run 在 ~5s
+    内失败、无任何 step 执行，是账号计费问题（"job was not started because
+    recent account payments have failed or your spending limit needs to be
+    increased"），需在 GitHub Settings → Billing & plans 修复支付 / 提高
+    Actions 消费上限，或将仓库转为公开；与工作流内容无关

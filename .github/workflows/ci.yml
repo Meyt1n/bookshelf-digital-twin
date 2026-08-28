@@ -1,14 +1,27 @@
 name: CI
 
+# 注意：本仓库为私有仓库，Actions 分钟数计费。若所有 run 在 ~5s 内失败且
+# 无任何 step 输出，说明是账号侧计费问题（GitHub 注解：
+# "The job was not started because recent account payments have failed or
+# your spending limit needs to be increased"）。需在 GitHub Settings →
+# Billing & plans 修复支付方式或提高 Actions 消费上限（或将仓库转公开）。
+# 工作流本身在本地等价流水线（npm ci + lint + test + build）全绿。
+
 on:
   push:
-    branches: [main, 'cursor/**']
+    branches: [main]
   pull_request:
     branches: [main]
+
+# 同一分支的旧 run 自动取消，减少计费分钟消耗
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
