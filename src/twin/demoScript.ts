@@ -1,4 +1,5 @@
 import { twinEngine } from './engine'
+import { getHistory, linkNavMission } from './taskHistory'
 
 const DEMO_TIMEOUT_MS = 120_000
 /** 全流程演示含两段 2D 导航行驶，放宽整体超时 */
@@ -73,6 +74,14 @@ function findOccupiedCid(): number | null {
   return occupied?.cid ?? null
 }
 
+/** 最近一次归档任务的 id：作为随后导航段的联动 ID（回放抽屉拼接用） */
+function latestTaskCorrelation(): string | null {
+  const rec = getHistory()[0]
+  if (!rec) return null
+  linkNavMission(rec.id, rec.id)
+  return rec.id
+}
+
 /**
  * 派送并等待到站。返回是否成功送达；受阻 / 不可达时写警告事件并返回 false。
  */
@@ -82,8 +91,9 @@ async function navMissionTo(
   label: string,
   signal: { aborted: boolean },
   timeoutAt: number,
+  correlationId?: string,
 ): Promise<boolean> {
-  if (!bridge.demoDispatchStation(stationId)) {
+  if (!bridge.demoDispatchStation(stationId, correlationId)) {
     twinEngine.noteScriptEvent(`导航无法前往「${label}」，全流程演示中止`, 'warn')
     return false
   }
@@ -189,7 +199,8 @@ export function startFullDemoScript(): () => void {
 
       bridge.ensureNavSimForDemo()
       twinEngine.noteScriptEvent('演示 2/4 · 配送小车前往藏书区')
-      if (!(await navMissionTo(bridge, 'stacks', '藏书区', signal, timeoutAt))) return
+      const storeCorr = latestTaskCorrelation() ?? undefined
+      if (!(await navMissionTo(bridge, 'stacks', '藏书区', signal, timeoutAt, storeCorr))) return
 
       const cid = findOccupiedCid()
       if (cid === null) {
@@ -205,7 +216,8 @@ export function startFullDemoScript(): () => void {
       if (signal.aborted) return
 
       twinEngine.noteScriptEvent('演示 4/4 · 配送小车返回充电桩')
-      if (!(await navMissionTo(bridge, 'charge', '充电桩', signal, timeoutAt))) return
+      const takeCorr = latestTaskCorrelation() ?? undefined
+      if (!(await navMissionTo(bridge, 'charge', '充电桩', signal, timeoutAt, takeCorr))) return
 
       twinEngine.noteScriptEvent('全流程演示完成 · 存书 / 导航 / 取书 / 返航 全链路贯通', 'ok')
     } catch {

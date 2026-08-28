@@ -18,6 +18,7 @@
    ============================================================ */
 
 import { PHASE_LABELS, twinEngine } from '../twin/engine'
+import { linkNavMission, noteNavPhase } from '../twin/taskHistory'
 import type { TaskPhase } from '../types'
 import { getNavMap } from './maps'
 import { navSimulator } from './simulator'
@@ -65,12 +66,14 @@ class TwinBridge {
       this.lastGoalLabel = null
       return
     }
-    // 新目标下达 → 写入孪生事件流
+    // 新目标下达 → 写入孪生事件流；有联动 ID 时同步写入任务回放时间线
     if (ui.phase === 'moving' && ui.goalLabel && ui.goalLabel !== this.lastGoalLabel) {
       this.lastGoalLabel = ui.goalLabel
       twinEngine.noteNavEvent(`配送导航联动 · 小车前往「${ui.goalLabel}」`)
+      if (ui.correlationId) noteNavPhase(ui.correlationId, `前往「${ui.goalLabel}」`)
     } else if (ui.phase === 'arrived' && this.lastGoalLabel) {
       twinEngine.noteNavEvent(`配送导航联动 · 已送达「${this.lastGoalLabel}」`, 'ok')
+      if (ui.correlationId) noteNavPhase(ui.correlationId, `已送达「${this.lastGoalLabel}」`)
       this.lastGoalLabel = null
     } else if (ui.phase === 'idle') {
       this.lastGoalLabel = null
@@ -103,7 +106,9 @@ class TwinBridge {
         'info',
       )
       if (ui.running && navIdle && navSimulator.mapId === 'library') {
-        navSimulator.dispatchTo('stacks')
+        // 联动 ID = 孪生任务 id：回放抽屉据此拼接导航阶段
+        navSimulator.dispatchTo('stacks', task.id)
+        linkNavMission(task.id, task.id)
       }
       return
     }
@@ -120,7 +125,8 @@ class TwinBridge {
         navIdle &&
         navSimulator.mapId === 'library'
       ) {
-        navSimulator.dispatchTo('charge')
+        navSimulator.dispatchTo('charge', task.id)
+        linkNavMission(task.id, task.id)
       }
     }
   }
@@ -148,15 +154,16 @@ export function ensureNavSimForDemo(): void {
 
 /**
  * 演示派送：若小车已在前往同一站点（如桥接联动的自动返航），
- * 不重复下达。返回任务是否成功进入配送中。
+ * 不重复下达。correlationId 关联孪生任务回放。
+ * 返回任务是否成功进入配送中。
  */
-export function demoDispatchStation(stationId: string): boolean {
+export function demoDispatchStation(stationId: string, correlationId?: string): boolean {
   bridge.init()
   const ui = navSimulator.getUiSnapshot()
   if (ui.phase === 'moving' && navSimulator.getRenderState().goalStationId === stationId) {
     return true
   }
-  navSimulator.dispatchTo(stationId)
+  navSimulator.dispatchTo(stationId, correlationId)
   return navSimulator.getUiSnapshot().phase === 'moving'
 }
 

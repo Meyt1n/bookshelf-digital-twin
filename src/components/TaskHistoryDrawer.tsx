@@ -46,9 +46,20 @@ export function TaskHistoryDrawer({ open, onClose }: Props) {
                 </span>
               ))}
             </div>
+            {rec.navPhases && rec.navPhases.length > 0 && (
+              <div className="history-nav" aria-label="导航联动阶段">
+                <i title={`联动 ${rec.correlationId ?? ''}`}>⌖</i>
+                {rec.navPhases.map((p, i) => (
+                  <span key={`${p.at}-${i}`} className="history-nav-step">
+                    {p.label}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="history-meta">
               {rec.actor} · {Math.max(0, Math.round((rec.endedAt - rec.startedAt) / 1000))}s
               {rec.fault ? ' · 急停' : ''}
+              {rec.correlationId ? ` · 联动 ${rec.correlationId}` : ''}
             </div>
           </li>
         ))}
