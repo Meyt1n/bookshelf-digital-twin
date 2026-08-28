@@ -729,7 +729,11 @@ export class TwinEngine {
 
   /** 指令台：将指定图书存入指定格口 */
   commandStoreTo(cid: number, bookId: number): void {
-    if (this.mode === 'live') return
+    if (this.mode === 'live') {
+      this.pushEvent('system', 'warn', '联机模式请在实体端存书')
+      this.emit()
+      return
+    }
     this.autonomous = false
     if (this.task || this.ocr) {
       this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
@@ -743,7 +747,11 @@ export class TwinEngine {
 
   /** 图书资产页：指定图书入库（顺位分配格口） */
   commandStoreBook(bookId: number): void {
-    if (this.mode === 'live') return
+    if (this.mode === 'live') {
+      this.pushEvent('system', 'warn', '联机模式请在实体端存书')
+      this.emit()
+      return
+    }
     this.autonomous = false
     if (this.task || this.ocr) {
       this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
@@ -928,13 +936,9 @@ export class TwinEngine {
     if (this.mode === 'live') return
     this.pushEvent('link', 'info', `正在探测实体书架服务 ${this.apiBase || '(同源 /api)'} ...`)
     this.emit()
-    const ok = await this.pollLive(true)
-    if (!ok) {
-      this.pushEvent('link', 'warn', '联机失败 · Flask 服务不可达，保持仿真模式')
-      this.emit()
-      return
-    }
-    this.simBackup = {
+    // 先备份仿真世界：探测成功的 pollLive 会立刻套用实体快照，
+    // 备份放在探测之后会把联机数据当成"仿真现场"，退出联机时无法还原
+    const backup: SimBackup = {
       compartments: this.compartments.map((c) => ({ ...c })),
       stored: { ...this.stored },
       booksById: { ...this.booksById },
@@ -945,6 +949,13 @@ export class TwinEngine {
       storeCount: this.stats.storeCount,
       takeCount: this.stats.takeCount,
     }
+    const ok = await this.pollLive(true)
+    if (!ok) {
+      this.pushEvent('link', 'warn', '联机失败 · Flask 服务不可达，保持仿真模式')
+      this.emit()
+      return
+    }
+    this.simBackup = backup
     this.mode = 'live'
     this.autonomous = false
     this.pushEvent('link', 'ok', '已联机 · 孪生体与实体书架数据同步中')
@@ -977,8 +988,20 @@ export class TwinEngine {
       this.stats.takeCount = this.simBackup.takeCount
       this.simBackup = null
     }
+    this.clearSyntheticBooks()
     this.pushEvent('link', 'info', '已断开联机 · 回到仿真模式')
     this.emit()
+  }
+
+  /**
+   * 清理联机期间为实体书目生成的合成条目（id ≥ 900）。
+   * 快照回滚通常已把 booksById 还原，此处兜底防止合成书泄漏进仿真世界。
+   */
+  private clearSyntheticBooks(): void {
+    for (const key of Object.keys(this.booksById)) {
+      const id = Number(key)
+      if (id >= 900) delete this.booksById[id]
+    }
   }
 
   /* ---------------- 实体温湿度遥测 ---------------- */
