@@ -714,6 +714,26 @@ export class TwinEngine {
     this.emit()
   }
 
+  /* ---------------- 导航联动（配送导航页经 twinBridge 桥接） ---------------- */
+
+  /** 2D 导航推送的底盘位姿覆盖：只接管 x/z/yaw/moving，机构动画不受影响 */
+  private navOverride: { x: number; z: number; yaw: number; moving: boolean } | null = null
+
+  /** 设置 / 清除导航位姿覆盖（null = 恢复任务驱动的小车动画） */
+  setNavCartOverride(pose: { x: number; z: number; yaw: number; moving: boolean } | null): void {
+    this.navOverride = pose
+  }
+
+  isNavSyncActive(): boolean {
+    return this.navOverride !== null
+  }
+
+  /** 导航侧事件写入孪生事件流（如「小车前往服务台」） */
+  noteNavEvent(text: string, level: EventLevel = 'info'): void {
+    this.pushEvent('motion', level, text)
+    this.emit()
+  }
+
   private startTask(action: TaskAction, cid: number, bookId: number, actor: string): void {
     const comp = this.compartments.find((c) => c.cid === cid)
     if (!comp || this.task) return
@@ -1614,6 +1634,16 @@ export class TwinEngine {
   }
 
   sampleCart(now: number): CartPose {
+    const base = this.sampleCartFromTask(now)
+    // 导航同步开启时底盘位姿以 2D 导航为准；mast/reach/carrying 等
+    // 机构状态仍由任务逻辑给出，存/取书动画不中断
+    const nav = this.navOverride
+    if (!nav) return base
+    return { ...base, x: nav.x, z: nav.z, yaw: nav.yaw, moving: nav.moving }
+  }
+
+  /** 任务驱动的小车位姿（未开导航同步时的原始行为） */
+  private sampleCartFromTask(now: number): CartPose {
     const dockYaw = 0
     const leaveLane = [...CART_LANE_TO_DOCK].reverse()
     const task = this.task

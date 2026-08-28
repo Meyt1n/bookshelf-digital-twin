@@ -61,6 +61,25 @@
   color: var(--cyan-bright);
 }
 
+/* 孪生同步状态（页签行右侧） */
+.navp-sync {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(11, 13, 27, 0.5);
+  transition: all 0.25s;
+}
+
+.navp-sync.on {
+  color: var(--green-bright);
+  border-color: rgba(52, 211, 153, 0.45);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.16);
+}
+
 .navp-canvas-wrap {
   position: relative;
   flex: 1;

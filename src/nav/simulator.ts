@@ -67,6 +67,8 @@ export type NavUiSnapshot = {
   simTime: number
   dynEnabled: boolean
   speedScale: number
+  /** 孪生同步开关（默认开）：由 twinBridge 读取并推送位姿到 3D 场景 */
+  twinSync: boolean
   events: NavEvent[]
 }
 
@@ -127,6 +129,7 @@ export class NavSimulator {
 
   private obstacles: DynamicObstacle[] = []
   private dynEnabled = true
+  private twinSync = true
 
   private trace: Vec2[] = []
   private traceTimer = 0
@@ -234,6 +237,7 @@ export class NavSimulator {
       simTime: this.simTime,
       dynEnabled: this.dynEnabled,
       speedScale: this.speedScale,
+      twinSync: this.twinSync,
       events: this.events,
     }
     return this.uiCache
@@ -377,6 +381,23 @@ export class NavSimulator {
   toggleDynamic(): void {
     this.dynEnabled = !this.dynEnabled
     this.pushEvent(this.dynEnabled ? '行人模拟已开启' : '行人模拟已关闭', 'info')
+    this.notify()
+  }
+
+  toggleTwinSync(): void {
+    this.twinSync = !this.twinSync
+    this.pushEvent(
+      this.twinSync
+        ? '孪生同步已开启 · 3D 总览小车将跟随导航位姿'
+        : '孪生同步已关闭 · 导航切换为独立仿真',
+      'info',
+    )
+    this.notify()
+  }
+
+  /** 外部系统（孪生桥接等）写入导航日志 */
+  noteExternal(text: string, kind: NavEvent['kind'] = 'info'): void {
+    this.pushEvent(text, kind)
     this.notify()
   }
 

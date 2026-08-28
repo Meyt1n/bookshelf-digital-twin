@@ -14,6 +14,7 @@ import {
   type RenderLayers,
 } from '../nav/render'
 import { navSimulator, phaseLabel } from '../nav/simulator'
+import { initTwinBridge } from '../nav/twinBridge'
 import type { NavEvent } from '../nav/types'
 
 type EditMode = 'goal' | 'wall' | 'erase' | 'robot'
@@ -61,6 +62,7 @@ export function NavigationPage() {
   const paintingRef = useRef<boolean | null>(null)
 
   useEffect(() => {
+    initTwinBridge()
     navSimulator.start()
     return () => navSimulator.stop()
   }, [])
@@ -158,6 +160,12 @@ export function NavigationPage() {
                 {m.label}
               </button>
             ))}
+            <span
+              className={`navp-sync ${ui.twinSync ? 'on' : ''}`}
+              title={ui.twinSync ? '3D 总览小车实时跟随导航位姿' : '导航与 3D 孪生互不影响'}
+            >
+              {ui.twinSync ? '● 已连接孪生' : '○ 独立仿真'}
+            </span>
           </div>
           <div className="navp-canvas-wrap" ref={wrapRef}>
             <canvas
@@ -258,6 +266,14 @@ export function NavigationPage() {
             </label>
 
             <div className="navp-toggles">
+              <button
+                type="button"
+                className={`navp-toggle ${ui.twinSync ? 'active' : ''}`}
+                title="开启后 3D 总览小车跟随导航位姿，孪生任务联动派送"
+                onClick={() => navSimulator.toggleTwinSync()}
+              >
+                孪生同步
+              </button>
               <button
                 type="button"
                 className={`navp-toggle ${ui.dynEnabled ? 'active' : ''}`}
