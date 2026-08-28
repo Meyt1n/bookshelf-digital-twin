@@ -1,0 +1,172 @@
+/* ---------- 按钮 / 输入 ---------- */
+.btn {
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: rgba(124, 140, 248, 0.07);
+  color: var(--indigo-bright);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 8px 15px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.25s cubic-bezier(0.22, 0.8, 0.3, 1);
+  letter-spacing: 1px;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -80%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(105deg, transparent, rgba(220, 230, 255, 0.16), transparent);
+  transform: skewX(-18deg);
+  transition: left 0.5s ease;
+  pointer-events: none;
+}
+
+.btn:hover:not(:disabled)::before {
+  left: 130%;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+  box-shadow: 0 6px 20px rgba(124, 140, 248, 0.28);
+  border-color: var(--indigo-bright);
+  background: rgba(124, 140, 248, 0.14);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+/* 主操作：渐变实底 */
+.btn-cyan {
+  border: none;
+  background: linear-gradient(135deg, rgba(124, 140, 248, 0.92), rgba(96, 116, 240, 0.88) 50%, rgba(34, 180, 220, 0.85));
+  color: #fff;
+  box-shadow:
+    0 4px 16px rgba(124, 140, 248, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.btn-cyan:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(140, 156, 255, 0.95), rgba(110, 130, 250, 0.92) 50%, rgba(50, 200, 238, 0.9));
+  box-shadow:
+    0 6px 24px rgba(124, 140, 248, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.btn-green {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.08);
+  color: var(--green-bright);
+}
+
+.btn-green:hover:not(:disabled) {
+  border-color: var(--green-bright);
+  background: rgba(52, 211, 153, 0.15);
+  box-shadow: 0 6px 20px rgba(52, 211, 153, 0.25);
+}
+
+.btn-amber {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.07);
+  color: var(--amber-bright);
+}
+
+.btn-amber:hover:not(:disabled) {
+  border-color: var(--amber-bright);
+  background: rgba(251, 191, 36, 0.13);
+  box-shadow: 0 6px 20px rgba(251, 191, 36, 0.22);
+}
+
+.btn-violet {
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(167, 139, 250, 0.08);
+  color: var(--violet-bright);
+}
+
+.btn-violet:hover:not(:disabled) {
+  border-color: var(--violet-bright);
+  background: rgba(167, 139, 250, 0.15);
+  box-shadow: 0 6px 20px rgba(167, 139, 250, 0.25);
+}
+
+.btn-blue {
+  border-color: rgba(94, 179, 246, 0.45);
+  background: rgba(94, 179, 246, 0.08);
+  color: #9fd2fb;
+}
+
+.btn-blue:hover:not(:disabled) {
+  border-color: #9fd2fb;
+  background: rgba(94, 179, 246, 0.16);
+  box-shadow: 0 6px 20px rgba(94, 179, 246, 0.25);
+}
+
+.btn-danger {
+  border-color: rgba(251, 113, 133, 0.5);
+  background: rgba(251, 113, 133, 0.07);
+  color: #fda4af;
+}
+
+.btn-danger:hover:not(:disabled) {
+  border-color: #fda4af;
+  background: rgba(251, 113, 133, 0.14);
+  box-shadow: 0 6px 20px rgba(251, 113, 133, 0.28);
+}
+
+.btn.is-running {
+  animation: btn-running 1.3s ease-in-out infinite;
+}
+
+@keyframes btn-running {
+  0%,
+  100% {
+    box-shadow: 0 0 5px rgba(167, 139, 250, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(167, 139, 250, 0.55);
+  }
+}
+
+.input {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(10, 13, 27, 0.72);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  padding: 8px 13px;
+  outline: none;
+  transition: all 0.25s;
+  min-width: 0;
+}
+
+.input:focus {
+  border-color: var(--indigo);
+  box-shadow: 0 0 0 3px rgba(124, 140, 248, 0.16);
+}
+
+.input::placeholder {
+  color: var(--dim);
+}
+
+select.input option {
+  background: #10142a;
+}
+

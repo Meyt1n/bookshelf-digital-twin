@@ -6,10 +6,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="智慧书架数字孪生驾驶舱：实体书架的实时 3D 映射与仿真" />
     <title>智慧书架 · 数字孪生驾驶舱</title>
+    <!-- 关键柜体模型预取：缩短总览 3D 首屏等待 -->
+    <link rel="preload" href="/model/bookcase-body.glb" as="fetch" crossorigin />
+    <!-- 字体：optional 避免阻塞首屏；失败则回退系统字体栈 -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=optional"
       rel="stylesheet"
     />
   </head>

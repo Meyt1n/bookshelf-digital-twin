@@ -1,7 +1,7 @@
-import { useMemo, useRef } from 'react'
+import { lazy, Suspense, useMemo, useRef } from 'react'
 import { useFrame, useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { MeshoptGLTFLoader } from './loadGltf'
 import { categoryColor } from '../catalog'
 import { twinEngine, taskPhaseProgress } from '../twin/engine'
 import type { BookInfo, Compartment, ModuleState, MotionTask } from '../types'
@@ -25,7 +25,9 @@ import {
   easeInOut,
   layerBottomY,
 } from './layout'
-import { Laminator } from './Laminator'
+
+const Laminator = lazy(() => import('./Laminator').then((m) => ({ default: m.Laminator })))
+
 
 /** 柜体各部件材质 */
 const BODY_MATERIALS: Record<string, THREE.MeshStandardMaterial> = {
@@ -346,7 +348,7 @@ function applyInspect(mat: THREE.MeshStandardMaterial, inspect: boolean, dim: nu
 
 /** 柜体主体：真实 STEP 模型（智能书柜.STEP → GLB，按部件染色） */
 function CabinetBody({ inspect }: { inspect: boolean }) {
-  const gltf = useLoader(GLTFLoader, '/model/bookcase-body.glb')
+  const gltf = useLoader(MeshoptGLTFLoader, '/model/bookcase-body.glb')
   const leftRef = useRef<THREE.Group>(null)
   const rightRef = useRef<THREE.Group>(null)
 
@@ -730,7 +732,9 @@ export function Bookshelf({
 
       <ShelfSign />
       <UvEffect uv={uv} />
-      <Laminator laminate={laminate} inspect={inspect} />
+      <Suspense fallback={null}>
+        <Laminator laminate={laminate} inspect={inspect} />
+      </Suspense>
     </group>
   )
 }

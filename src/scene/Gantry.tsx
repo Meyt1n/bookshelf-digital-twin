@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { useFrame, useLoader } from '@react-three/fiber'
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { MeshoptGLTFLoader } from './loadGltf'
 import { categoryColor } from '../catalog'
 import { twinEngine } from '../twin/engine'
 import { BookMesh } from './BookMesh'
@@ -133,8 +133,8 @@ const TRAIL_LEN = 42
 
 /** 真实机械零件龙门（立式）：横梁组沿竖直导轨升降（Y）+ 抓取头沿丝杆左右横移（X），不前后移动 */
 export function Gantry() {
-  const beamGltf = useLoader(GLTFLoader, '/model/bookcase-beam.glb')
-  const headGltf = useLoader(GLTFLoader, '/model/bookcase-head.glb')
+  const beamGltf = useLoader(MeshoptGLTFLoader, '/model/bookcase-beam.glb')
+  const headGltf = useLoader(MeshoptGLTFLoader, '/model/bookcase-head.glb')
 
   const beamScene = useMemo(() => {
     const scene = beamGltf.scene.clone(true)

@@ -1,21 +1,22 @@
 import { PHASE_LABELS, taskFlow } from '../twin/engine'
-import type { TwinSnapshot } from '../types'
+import { selectTaskCard, taskCardEqual } from '../twin/selectors'
+import { useTwinSelector } from '../twin/useTwin'
 
-export function TaskCard({ snapshot }: { snapshot: TwinSnapshot }) {
-  const { task, ocr } = snapshot
+/** 横向相位时间轴 HUD（替代密集相位点） */
+export function TaskCard() {
+  const { task, ocr, ocrTitle } = useTwinSelector(selectTaskCard, taskCardEqual)
   if (!task && !ocr) return null
 
   const ocrTotal = ocr?.stages.length ?? 0
   const ocrDone = ocr?.stages.filter((s) => s.emitted).length ?? 0
   const ocrCurrent = ocr ? (ocr.stages.find((s) => !s.emitted) ?? ocr.stages[ocrTotal - 1]) : null
-  const ocrBook = ocr ? snapshot.booksById[ocr.bookId] : null
 
   if (!task && ocr && ocrCurrent) {
     return (
       <div className="task-card ocr">
         <div className="task-card-head">
           <span className="task-tag tag-ocr">视觉识别</span>
-          <span className="task-title">《{ocrBook?.title ?? '…'}》</span>
+          <span className="task-title">《{ocrTitle ?? '…'}》</span>
         </div>
         <div className="phase-now">
           <span className="phase-now-label">当前阶段</span>
@@ -49,19 +50,20 @@ export function TaskCard({ snapshot }: { snapshot: TwinSnapshot }) {
         <span className="phase-now-label">{isFault ? '状态' : '当前阶段'}</span>
         <strong>{PHASE_LABELS[task.phase] ?? task.phase}</strong>
       </div>
-      <div className="phase-flow">
+      <ol className="phase-timeline" aria-label="作业相位时间轴">
         {flow.map((phase, i) => {
-          let cls = 'phase-step'
+          let cls = 'timeline-step'
           if (isFault) cls += ' fault'
           else if (i < activeIdx || task.phase === 'done') cls += ' done'
           else if (i === activeIdx) cls += ' active'
           return (
-            <span key={phase} className={cls} title={PHASE_LABELS[phase]}>
+            <li key={phase} className={cls} title={PHASE_LABELS[phase]}>
               <i />
-            </span>
+              <span>{PHASE_LABELS[phase] ?? phase}</span>
+            </li>
           )
         })}
-      </div>
+      </ol>
       <div className="task-progress">
         <span style={{ width: `${pct}%` }} />
       </div>

@@ -1,6 +1,7 @@
 import { ACK_LABELS } from '../twin/engine'
+import { selectRegisters } from '../twin/selectors'
+import { useTwinSelector } from '../twin/useTwin'
 import { hex2 } from '../format'
-import type { TwinSnapshot } from '../types'
 
 const REG_ROWS: Array<{ addr: number; name: string; key: 'newCmdFlag' | 'cmd' | 'floorId' | 'cellId' | 'ack' }> = [
   { addr: 0, name: 'NEW_CMD_FLAG', key: 'newCmdFlag' },
@@ -18,8 +19,8 @@ function ackChipClass(ack: number): string {
 }
 
 /** STM32 I2C 寄存器组镜像（对应 services/stm32_protocol.py 寄存器表） */
-export function RegisterPanel({ snapshot }: { snapshot: TwinSnapshot }) {
-  const regs = snapshot.registers
+export function RegisterPanel() {
+  const regs = useTwinSelector(selectRegisters)
   return (
     <section className="panel">
       <header className="panel-head">

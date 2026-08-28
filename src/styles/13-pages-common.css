@@ -1,0 +1,10 @@
+/* ---------- 页面通用 ---------- */
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 13px 15px 15px;
+}
+

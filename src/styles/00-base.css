@@ -1,0 +1,151 @@
+/* ============================================================
+   智慧书架 · 数字孪生 —— 「极光晶体」主题
+   深空蓝紫为底，靛青双色流光，玻璃质感，柔性组件
+   ============================================================ */
+
+:root {
+  --bg: #070915;
+  --bg-solid: #070915;
+  --panel-top: rgba(18, 22, 42, 0.72);
+  --panel-bottom: rgba(11, 13, 27, 0.78);
+  --line: rgba(139, 155, 224, 0.14);
+  --line-strong: rgba(150, 168, 245, 0.38);
+  --text: #e8ecfb;
+  --muted: #8b93b8;
+  --dim: #5a6284;
+  --indigo: #7c8cf8;
+  --indigo-bright: #a5b4ff;
+  --cyan: #22d3ee;
+  --cyan-bright: #7ae7f7;
+  --violet: #a78bfa;
+  --violet-bright: #c4b5fd;
+  --rose: #f472b6;
+  --green: #34d399;
+  --green-bright: #6ee7b7;
+  --amber: #fbbf24;
+  --amber-bright: #fcd34d;
+  --red: #fb7185;
+  --grad-main: linear-gradient(135deg, #8ca6ff, #7c8cf8 45%, #22d3ee);
+  --grad-text: linear-gradient(135deg, #e3e9ff 10%, #a5b4ff 55%, #7ae7f7);
+  --font-body: 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-num: 'Space Grotesk', 'Noto Sans SC', 'DIN Alternate', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'SF Mono', Consolas, monospace;
+}
+
+html[data-theme='contrast'] {
+  --bg: #04060f;
+  --bg-solid: #04060f;
+  --panel-top: rgba(24, 30, 58, 0.88);
+  --panel-bottom: rgba(10, 12, 28, 0.92);
+  --line: rgba(180, 196, 255, 0.28);
+  --line-strong: rgba(200, 214, 255, 0.55);
+  --text: #f4f7ff;
+  --muted: #b7c0e0;
+  --indigo: #9aa8ff;
+  --cyan: #3de7ff;
+  --grad-main: linear-gradient(135deg, #b8c6ff, #8ea0ff 45%, #3de7ff);
+}
+
+html[data-theme='venue'] {
+  --bg: #05070f;
+  --bg-solid: #05070f;
+  --panel-top: rgba(12, 14, 26, 0.78);
+  --panel-bottom: rgba(7, 8, 16, 0.86);
+  --line: rgba(100, 112, 160, 0.16);
+  --line-strong: rgba(120, 132, 180, 0.32);
+  --text: #d7dcf0;
+  --muted: #7a829e;
+  --indigo: #6b78c9;
+  --cyan: #1aabb8;
+  --violet: #8668c4;
+  --grad-main: linear-gradient(135deg, #5d6aab, #4a59a0 45%, #1aabb8);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.cell-tile:focus-visible,
+.view-tool-btn:focus-visible,
+.nav-btn:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--cyan-bright);
+  outline-offset: 2px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg-solid);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 极光漂移 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 32% at 22% 18%, rgba(94, 84, 224, 0.2), transparent 70%),
+    radial-gradient(30% 28% at 80% 12%, rgba(34, 150, 238, 0.13), transparent 70%),
+    radial-gradient(36% 34% at 74% 86%, rgba(147, 84, 224, 0.14), transparent 70%),
+    radial-gradient(26% 24% at 12% 84%, rgba(34, 211, 238, 0.09), transparent 70%);
+  animation: aurora-drift 26s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift {
+  0% {
+    transform: translate3d(-2%, -1.5%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(1.5%, 2%, 0) scale(1.06);
+  }
+  100% {
+    transform: translate3d(3%, -1%, 0) scale(1.02);
+  }
+}
+
+html.reduce-motion body::before,
+html[data-perf='low'] body::before {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
+  }
+}
+
+/* 点阵 + 暗角 */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background-image: radial-gradient(rgba(139, 155, 224, 0.05) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(120% 100% at 50% 40%, black 50%, transparent 100%);
+}
+
+::selection {
+  background: rgba(124, 140, 248, 0.4);
+}
+

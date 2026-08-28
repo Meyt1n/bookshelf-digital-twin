@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { fmtTime } from '../format'
-import type { EventKind, TwinSnapshot } from '../types'
+import { refEqual, selectEvents } from '../twin/selectors'
+import { useThrottledTwinSelector } from '../twin/useTwin'
+import type { EventKind } from '../types'
 
 const KIND_ICONS: Record<EventKind, string> = {
   system: '◈',
@@ -24,17 +26,16 @@ const FILTERS: Array<{ id: FilterId; label: string; kinds: EventKind[] | null }>
   { id: 'system', label: '系统', kinds: ['system', 'link', 'uv', 'laminate'] },
 ]
 
-export function EventStream({ snapshot }: { snapshot: TwinSnapshot }) {
+export function EventStream() {
+  const allEvents = useThrottledTwinSelector(selectEvents, refEqual, 500)
   const [filter, setFilter] = useState<FilterId>('all')
   const active = FILTERS.find((f) => f.id === filter) ?? FILTERS[0]
   const events =
-    active.kinds === null
-      ? snapshot.events
-      : snapshot.events.filter((evt) => active.kinds!.includes(evt.kind))
+    active.kinds === null ? allEvents : allEvents.filter((evt) => active.kinds!.includes(evt.kind))
 
   const counts = FILTERS.map((f) => ({
     id: f.id,
-    n: f.kinds === null ? snapshot.events.length : snapshot.events.filter((evt) => f.kinds!.includes(evt.kind)).length,
+    n: f.kinds === null ? allEvents.length : allEvents.filter((evt) => f.kinds!.includes(evt.kind)).length,
   }))
 
   return (

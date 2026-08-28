@@ -1,15 +1,24 @@
 import { useEffect, useState } from 'react'
-import { twinEngine } from '../twin/useTwin'
-import type { TwinSnapshot } from '../types'
+import { twinEngine, useTwinSelector } from '../twin/useTwin'
+import type { LinkState, TwinSnapshot } from '../types'
+import { captureViewportPng, exportKpiJson, recordViewportBrief } from '../ui/exportShare'
+import { cycleTheme, getTheme, type ThemeId } from '../ui/theme'
 
-export type PageId = 'overview' | 'books' | 'analytics' | 'devices'
+export type PageId = 'overview' | 'books' | 'analytics' | 'navigation' | 'devices'
 
 const NAV_ITEMS: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'overview', label: '孪生总览', icon: '◈' },
   { id: 'books', label: '图书资产', icon: '❒' },
   { id: 'analytics', label: '数据分析', icon: '∿' },
+  { id: 'navigation', label: '配送导航', icon: '⌖' },
   { id: 'devices', label: '设备诊断', icon: '⚙' },
 ]
+
+const THEME_LABEL: Record<ThemeId, string> = {
+  aurora: '极光',
+  contrast: '高对比',
+  venue: '展厅',
+}
 
 const LINK_DOT: Record<string, string> = {
   online: 'dot-ok',
@@ -33,14 +42,51 @@ const CLIMATE_SOURCE_TAGS: Record<string, string> = {
   fallback: '基准',
 }
 
+type TopBarSlice = {
+  mode: 'sim' | 'live'
+  liveHealthy: boolean
+  links: LinkState[]
+  temperature: number
+  humidity: number
+  climateSource: string
+}
+
+function selectTopBar(s: TwinSnapshot): TopBarSlice {
+  return {
+    mode: s.mode,
+    liveHealthy: s.liveHealthy,
+    links: s.links,
+    temperature: s.telemetry.temperature,
+    humidity: s.telemetry.humidity,
+    climateSource: s.telemetry.climateSource,
+  }
+}
+
+function topBarEqual(a: TopBarSlice, b: TopBarSlice): boolean {
+  return (
+    a.mode === b.mode &&
+    a.liveHealthy === b.liveHealthy &&
+    a.temperature === b.temperature &&
+    a.humidity === b.humidity &&
+    a.climateSource === b.climateSource &&
+    a.links === b.links
+  )
+}
+
 type TopBarProps = {
-  snapshot: TwinSnapshot
   page: PageId
   onNavigate: (page: PageId) => void
 }
 
-export function TopBar({ snapshot, page, onNavigate }: TopBarProps) {
+export function TopBar({ page, onNavigate }: TopBarProps) {
+  const { mode, liveHealthy, links, temperature, humidity, climateSource } = useTwinSelector(
+    selectTopBar,
+    topBarEqual,
+  )
   const [clock, setClock] = useState('')
+  const [theme, setTheme] = useState<ThemeId>(() => getTheme())
+  const [exportHint, setExportHint] = useState('')
+
   useEffect(() => {
     const update = () => {
       const d = new Date()
@@ -52,16 +98,11 @@ export function TopBar({ snapshot, page, onNavigate }: TopBarProps) {
     return () => window.clearInterval(t)
   }, [])
 
-  const { mode, liveHealthy, telemetry } = snapshot
   const modeClass = mode === 'live' ? (liveHealthy ? 'mode-live' : 'mode-error') : 'mode-sim'
   const modeText = mode === 'live' ? (liveHealthy ? '已联机' : '联机异常') : '仿真运行'
-  const climateTag = CLIMATE_SOURCE_TAGS[telemetry.climateSource]
+  const climateTag = CLIMATE_SOURCE_TAGS[climateSource]
   const climateChipClass =
-    telemetry.climateSource === 'sensor'
-      ? 'climate-real'
-      : telemetry.climateSource === 'sim'
-        ? ''
-        : 'climate-est'
+    climateSource === 'sensor' ? 'climate-real' : climateSource === 'sim' ? '' : 'climate-est'
 
   return (
     <header className="topbar">
@@ -73,7 +114,7 @@ export function TopBar({ snapshot, page, onNavigate }: TopBarProps) {
         </div>
       </div>
 
-      <nav className="main-nav">
+      <nav className="main-nav" aria-label="主导航">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.id}
@@ -94,30 +135,77 @@ export function TopBar({ snapshot, page, onNavigate }: TopBarProps) {
           onClick={() => onNavigate('devices')}
           title="数据链路：驾驶舱 ↔ Flask ↔ Pi 桥接 ↔ STM32（点击查看设备诊断）"
         >
-          {snapshot.links.map((link) => (
+          {links.map((link) => (
             <span key={link.id} className={`link-dot ${LINK_DOT[link.status]}`} />
           ))}
           <em>链路</em>
         </button>
         <div
           className={`climate-chip ${climateChipClass}`}
-          title={`柜内环境遥测 · ${CLIMATE_SOURCE_LABELS[telemetry.climateSource] ?? telemetry.climateSource}`}
+          title={`柜内环境遥测 · ${CLIMATE_SOURCE_LABELS[climateSource] ?? climateSource}`}
         >
           <span className="climate-item">
             <i className="climate-ico temp" />
-            {telemetry.temperature.toFixed(1)}
+            {temperature.toFixed(1)}
             <em>°C</em>
           </span>
           <span className="climate-item">
             <i className="climate-ico hum" />
-            {Math.round(telemetry.humidity)}
+            {Math.round(humidity)}
             <em>%RH</em>
           </span>
           {climateTag ? (
-            <span className={`climate-live-tag ${telemetry.climateSource === 'sensor' ? '' : 'is-est'}`}>
+            <span className={`climate-live-tag ${climateSource === 'sensor' ? '' : 'is-est'}`}>
               {climateTag}
             </span>
           ) : null}
+        </div>
+        <button
+          type="button"
+          className="theme-btn"
+          title="切换主题：极光 / 演示高对比 / 展厅暗光"
+          onClick={() => setTheme(cycleTheme())}
+        >
+          {THEME_LABEL[theme]}
+        </button>
+        <div className="export-group">
+          <button
+            type="button"
+            className="theme-btn"
+            title="导出今日 KPI JSON"
+            onClick={() => {
+              exportKpiJson(twinEngine.getSnapshot())
+              setExportHint('KPI')
+              window.setTimeout(() => setExportHint(''), 1200)
+            }}
+          >
+            KPI
+          </button>
+          <button
+            type="button"
+            className="theme-btn"
+            title="截取 3D 视口"
+            onClick={() => {
+              setExportHint(captureViewportPng() ? '截图' : '失败')
+              window.setTimeout(() => setExportHint(''), 1200)
+            }}
+          >
+            截图
+          </button>
+          <button
+            type="button"
+            className="theme-btn"
+            title="短录屏约 4 秒"
+            onClick={() => {
+              void recordViewportBrief(4000).then((r) => {
+                setExportHint(r === 'fail' ? '失败' : r === 'webm' ? '录屏' : '截图')
+                window.setTimeout(() => setExportHint(''), 1200)
+              })
+            }}
+          >
+            录屏
+          </button>
+          {exportHint ? <em className="export-hint">{exportHint}</em> : null}
         </div>
         <button
           type="button"

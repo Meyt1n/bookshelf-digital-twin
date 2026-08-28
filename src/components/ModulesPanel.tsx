@@ -1,5 +1,7 @@
 import { PHASE_LABELS } from '../twin/engine'
-import type { ModuleStatus, TwinSnapshot } from '../types'
+import { modulesEqual, selectModules } from '../twin/selectors'
+import { useTwinSelector } from '../twin/useTwin'
+import type { ModuleStatus } from '../types'
 
 type Row = {
   key: string
@@ -16,8 +18,8 @@ function badgeClass(status: Row['status']): string {
   return 'badge badge-idle'
 }
 
-export function ModulesPanel({ snapshot }: { snapshot: TwinSnapshot }) {
-  const { task, modules } = snapshot
+export function ModulesPanel() {
+  const { task, ocr, modules } = useTwinSelector(selectModules, modulesEqual)
 
   let gantryStatus: Row['status'] = 'idle'
   let gantryText = '待机'
@@ -121,7 +123,7 @@ export function ModulesPanel({ snapshot }: { snapshot: TwinSnapshot }) {
   let cartStatus: Row['status'] = 'idle'
   let cartText = '巡游'
   let cartDesc = '柜后待命 · 把书直送第二层左侧大隔间'
-  if (snapshot.ocr && !task) {
+  if (ocr && !task) {
     cartStatus = 'running'
     cartText = '送书中'
     cartDesc = '从柜后驶向大隔间送书'
@@ -193,8 +195,8 @@ export function ModulesPanel({ snapshot }: { snapshot: TwinSnapshot }) {
     {
       key: 'camera',
       name: '视觉识别 (YOLO+OCR)',
-      desc: snapshot.ocr
-        ? snapshot.ocr.stages.find((s) => !s.emitted)?.text ?? '正在识别书封文本…'
+      desc: ocr
+        ? ocr.stages.find((s) => !s.emitted)?.text ?? '正在识别书封文本…'
         : '大隔间上方摄像头待命',
       status: modules.camera.status,
       statusText: modules.camera.status === 'running' ? '识别中' : '待机',

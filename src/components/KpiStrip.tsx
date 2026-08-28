@@ -1,19 +1,14 @@
-import type { TwinSnapshot } from '../types'
+import { kpiEqual, selectKpi } from '../twin/selectors'
+import { useTwinSelector } from '../twin/useTwin'
 
-export function KpiStrip({ snapshot }: { snapshot: TwinSnapshot }) {
-  const total = snapshot.compartments.length
-  const used = snapshot.compartments.filter((c) => c.status === 'occupied').length
-  const pct = total > 0 ? Math.round((used / total) * 100) : 0
-  const ops = snapshot.stats.storeCount + snapshot.stats.takeCount
-  const live =
-    (snapshot.task !== null && snapshot.task.phase !== 'done' && snapshot.task.phase !== 'fault') ||
-    snapshot.ocr !== null ||
-    snapshot.modules.uv.status === 'running' ||
-    snapshot.modules.laminate.status === 'running'
+export function KpiStrip() {
+  const kpi = useTwinSelector(selectKpi, kpiEqual)
+  const pct = kpi.compartmentCount > 0 ? Math.round((kpi.used / kpi.compartmentCount) * 100) : 0
+  const ops = kpi.storeCount + kpi.takeCount
 
   return (
-    <div className={`kpi-strip ${live ? 'is-live' : ''}`}>
-      {live ? (
+    <div className={`kpi-strip ${kpi.live ? 'is-live' : ''}`}>
+      {kpi.live ? (
         <div className="kpi-chip live">
           <b>
             <i />
@@ -22,15 +17,15 @@ export function KpiStrip({ snapshot }: { snapshot: TwinSnapshot }) {
         </div>
       ) : null}
       <div className="kpi-chip">
-        <b>{total}</b>
+        <b>{kpi.compartmentCount}</b>
         <span>格口总数</span>
       </div>
       <div className="kpi-chip cyan">
-        <b>{used}</b>
+        <b>{kpi.used}</b>
         <span>在架图书</span>
       </div>
       <div className="kpi-chip green">
-        <b>{total - used}</b>
+        <b>{kpi.compartmentCount - kpi.used}</b>
         <span>空闲格口</span>
       </div>
       <div className="kpi-chip amber">

@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { MEMBERS, categoryColor } from '../catalog'
-import { twinEngine } from '../twin/useTwin'
-import type { TwinSnapshot } from '../types'
+import { inventoryEqual, selectInventory, type InventorySlice } from '../twin/selectors'
+import { twinEngine, useTwinSelector } from '../twin/useTwin'
 
-function InventoryList({ snapshot }: { snapshot: TwinSnapshot }) {
-  const entries = Object.entries(snapshot.stored)
+function InventoryList({ inventory }: { inventory: InventorySlice }) {
+  const entries = Object.entries(inventory.stored)
     .map(([cidStr, meta]) => ({
       cid: Number(cidStr),
-      book: snapshot.booksById[meta.bookId],
+      book: inventory.booksById[meta.bookId],
       meta,
     }))
     .filter((e) => e.book)
@@ -20,13 +20,13 @@ function InventoryList({ snapshot }: { snapshot: TwinSnapshot }) {
   return (
     <ul className="inv-list">
       {entries.map(({ cid, book }) => {
-        const comp = snapshot.compartments.find((c) => c.cid === cid)
+        const comp = inventory.compartments.find((c) => c.cid === cid)
         return (
           <li key={cid}>
             <button
               type="button"
-              className={`inv-item ${snapshot.selectedCid === cid ? 'is-selected' : ''}`}
-              onClick={() => twinEngine.setSelected(snapshot.selectedCid === cid ? null : cid)}
+              className={`inv-item ${inventory.selectedCid === cid ? 'is-selected' : ''}`}
+              onClick={() => twinEngine.setSelected(inventory.selectedCid === cid ? null : cid)}
             >
               <span className="inv-spine" style={{ background: categoryColor(book.category) }} />
               <span className="inv-title">{book.title}</span>
@@ -44,14 +44,14 @@ function InventoryList({ snapshot }: { snapshot: TwinSnapshot }) {
   )
 }
 
-function StatsView({ snapshot }: { snapshot: TwinSnapshot }) {
-  const total = snapshot.compartments.length
-  const used = snapshot.compartments.filter((c) => c.status === 'occupied').length
+function StatsView({ inventory }: { inventory: InventorySlice }) {
+  const total = inventory.compartments.length
+  const used = inventory.compartments.filter((c) => c.status === 'occupied').length
   const pct = total > 0 ? Math.round((used / total) * 100) : 0
 
   const categoryCount: Record<string, number> = {}
-  for (const meta of Object.values(snapshot.stored)) {
-    const book = snapshot.booksById[meta.bookId]
+  for (const meta of Object.values(inventory.stored)) {
+    const book = inventory.booksById[meta.bookId]
     if (!book) continue
     categoryCount[book.category] = (categoryCount[book.category] ?? 0) + 1
   }
@@ -60,9 +60,9 @@ function StatsView({ snapshot }: { snapshot: TwinSnapshot }) {
 
   const activity = MEMBERS.map((m) => ({
     ...m,
-    count: snapshot.stats.memberActivity[`${m.name} · 语音`] ?? 0,
+    count: inventory.stats.memberActivity[`${m.name} · 语音`] ?? 0,
   }))
-  for (const [key, count] of Object.entries(snapshot.stats.memberActivity)) {
+  for (const [key, count] of Object.entries(inventory.stats.memberActivity)) {
     const name = key.split(' · ')[0]
     const row = activity.find((a) => a.name === name && !key.endsWith('语音'))
     if (row) row.count += count
@@ -92,16 +92,16 @@ function StatsView({ snapshot }: { snapshot: TwinSnapshot }) {
         </div>
         <div className="stats-kv">
           <div>
-            <em>{snapshot.stats.storeCount}</em>存书
+            <em>{inventory.stats.storeCount}</em>存书
           </div>
           <div>
-            <em>{snapshot.stats.takeCount}</em>取书
+            <em>{inventory.stats.takeCount}</em>取书
           </div>
           <div>
-            <em>{snapshot.stats.uvCount}</em>消毒
+            <em>{inventory.stats.uvCount}</em>消毒
           </div>
           <div>
-            <em>{snapshot.stats.laminateCount}</em>塑封
+            <em>{inventory.stats.laminateCount}</em>塑封
           </div>
         </div>
       </div>
@@ -144,9 +144,10 @@ function StatsView({ snapshot }: { snapshot: TwinSnapshot }) {
   )
 }
 
-export function InventoryTabs({ snapshot }: { snapshot: TwinSnapshot }) {
+export function InventoryTabs() {
+  const inventory = useTwinSelector(selectInventory, inventoryEqual)
   const [tab, setTab] = useState<'inv' | 'stats'>('inv')
-  const used = Object.keys(snapshot.stored).length
+  const used = Object.keys(inventory.stored).length
   return (
     <section className="panel panel-grow">
       <header className="panel-head tabs-head">
@@ -157,7 +158,7 @@ export function InventoryTabs({ snapshot }: { snapshot: TwinSnapshot }) {
           运行统计
         </button>
       </header>
-      <div className="panel-scroll">{tab === 'inv' ? <InventoryList snapshot={snapshot} /> : <StatsView snapshot={snapshot} />}</div>
+      <div className="panel-scroll">{tab === 'inv' ? <InventoryList inventory={inventory} /> : <StatsView inventory={inventory} />}</div>
     </section>
   )
 }
