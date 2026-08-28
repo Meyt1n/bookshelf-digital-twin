@@ -1,9 +1,10 @@
 /* ============================================================
    NavSimulator：配送导航仿真引擎（模块级单例，rAF 循环在 React 之外）
-   - 图书馆配送楼层 19.2m × 11.2m，96×56 占据栅格
-   - 全局：A* + string-pull；局部：纯追踪 + DWA-lite
+   - 多地图：图书馆 / 仓库 / 展厅，世界尺寸随地图动态建栅格
+   - 全局：A* + string-pull；局部：阿克曼纯追踪 + DWA-lite
    - UI 通过 subscribe/getUiSnapshot 低频订阅；画布每帧读取渲染态
-   注意：本模块不依赖 src/twin/，可独立运行与测试
+   注意：本模块不依赖 src/twin/，可独立运行与测试；
+   与 3D 孪生的双向同步由 twinBridge.ts 在外部桥接
    ============================================================ */
 
 import { WHEELBASE, integrateAckermann, steerToOmega } from './ackermann'
@@ -11,24 +12,23 @@ import { findPath } from './astar'
 import type { DwaDecision, DwaObstacle } from './dwa'
 import { DEFAULT_DWA, dwaSelect, type DwaParams } from './dwa'
 import {
-  CELL_SIZE,
-  WORLD_H,
-  WORLD_W,
   cellCenter,
   createGrid,
   inflate,
   isOccupied,
   nearestFreeCell,
   setCell,
-  setRectWorld,
   worldToCell,
 } from './grid'
+import { getNavMap } from './maps'
 import { DEFAULT_PURSUIT, clamp, purePursuit, type PursuitParams } from './purePursuit'
 import { cellsToWorld, pathLength, smoothPath } from './smooth'
 import type {
   DynamicObstacle,
   MissionPhase,
   NavEvent,
+  NavMapDef,
+  NavMapId,
   OccupancyGrid,
   Pose,
   Station,
@@ -53,6 +53,7 @@ export type NavUiSnapshot = {
   version: number
   running: boolean
   paused: boolean
+  mapId: NavMapId
   phase: MissionPhase
   goalLabel: string | null
   planMs: number
@@ -91,15 +92,6 @@ export type NavRenderState = {
   simTime: number
 }
 
-const STATION_DEFS: Station[] = [
-  { id: 'charge', label: '充电桩', icon: '⚡', pos: { x: 1.0, y: 10.2 } },
-  { id: 'desk', label: '服务台', icon: '◈', pos: { x: 10.5, y: 3.6 } },
-  { id: 'returns', label: '还书口', icon: '↩', pos: { x: 1.0, y: 1.0 } },
-  { id: 'stacks', label: '藏书区', icon: '❒', pos: { x: 4.6, y: 5.5 } },
-  { id: 'reading', label: '阅览区', icon: '☰', pos: { x: 15.4, y: 5.0 } },
-  { id: 'elevator', label: '电梯厅', icon: '▤', pos: { x: 18.1, y: 10.1 } },
-]
-
 const PHASE_TEXT: Record<MissionPhase, string> = {
   idle: '待命',
   planning: '规划中',
@@ -113,75 +105,12 @@ export function phaseLabel(phase: MissionPhase): string {
   return PHASE_TEXT[phase]
 }
 
-function paintDefaultWorld(grid: OccupancyGrid): void {
-  grid.occ.fill(0)
-  // 四周外墙
-  setRectWorld(grid, 0, 0, WORLD_W, 0.2, 1)
-  setRectWorld(grid, 0, WORLD_H - 0.2, WORLD_W, WORLD_H, 1)
-  setRectWorld(grid, 0, 0, 0.2, WORLD_H, 1)
-  setRectWorld(grid, WORLD_W - 0.2, 0, WORLD_W, WORLD_H, 1)
-  // 藏书区：四排书架
-  for (let i = 0; i < 4; i++) {
-    const y = 1.9 + i * 2.2
-    setRectWorld(grid, 1.8, y, 7.6, y + 0.6, 1)
-  }
-  // 中央服务台
-  setRectWorld(grid, 9.5, 4.6, 11.7, 7.0, 1)
-  // 立柱
-  setRectWorld(grid, 12.7, 2.2, 13.15, 2.65, 1)
-  setRectWorld(grid, 12.7, 8.6, 13.15, 9.05, 1)
-  // 阅览区桌椅
-  setRectWorld(grid, 14.2, 1.4, 15.4, 2.2, 1)
-  setRectWorld(grid, 16.6, 2.6, 17.8, 3.4, 1)
-  setRectWorld(grid, 14.0, 6.6, 15.2, 7.4, 1)
-  setRectWorld(grid, 16.4, 7.6, 17.6, 8.4, 1)
-  // 自助借还机
-  setRectWorld(grid, 5.4, 10.0, 7.0, 10.6, 1)
-}
-
-function makeDynObstacles(): DynamicObstacle[] {
-  return [
-    {
-      id: 1,
-      label: '读者',
-      radius: 0.24,
-      from: { x: 8.6, y: 1.2 },
-      to: { x: 8.6, y: 10.0 },
-      speed: 0.5,
-      t: 0.15,
-      dir: 1,
-      pos: { x: 8.6, y: 2.52 },
-    },
-    {
-      id: 2,
-      label: '读者',
-      radius: 0.24,
-      from: { x: 12.4, y: 5.6 },
-      to: { x: 18.0, y: 5.6 },
-      speed: 0.42,
-      t: 0.6,
-      dir: -1,
-      pos: { x: 15.76, y: 5.6 },
-    },
-    {
-      id: 3,
-      label: '推车',
-      radius: 0.3,
-      from: { x: 1.2, y: 3.1 },
-      to: { x: 8.2, y: 3.1 },
-      speed: 0.34,
-      t: 0.35,
-      dir: 1,
-      pos: { x: 3.65, y: 3.1 },
-    },
-  ]
-}
-
 export class NavSimulator {
-  readonly grid: OccupancyGrid
-  readonly stations: Station[]
+  grid!: OccupancyGrid
+  stations!: Station[]
 
-  private pose: Pose
+  private currentMapId!: NavMapId
+  private pose!: Pose
   private twist: Twist = { v: 0, w: 0 }
   /** 当前前轮转角（弧度） */
   private steering = 0
@@ -196,7 +125,7 @@ export class NavSimulator {
   private lookahead: Vec2 | null = null
   private lastDwa: DwaDecision | null = null
 
-  private obstacles: DynamicObstacle[] = makeDynObstacles()
+  private obstacles: DynamicObstacle[] = []
   private dynEnabled = true
 
   private trace: Vec2[] = []
@@ -231,19 +160,52 @@ export class NavSimulator {
   private uiCache: NavUiSnapshot | null = null
   private uiTimer = 0
 
-  constructor() {
-    this.grid = createGrid()
-    paintDefaultWorld(this.grid)
+  constructor(mapId: NavMapId = 'library') {
+    this.applyMap(getNavMap(mapId))
+    this.pushEvent('导航仿真就绪：点击地图任意可达点，或一键派送至站点', 'info')
+  }
+
+  get mapId(): NavMapId {
+    return this.currentMapId
+  }
+
+  /** 加载地图：动态建栅格、吸附站点、重生动态障碍、小车回出生点 */
+  private applyMap(map: NavMapDef): void {
+    this.currentMapId = map.id
+    this.grid = createGrid(
+      Math.round(map.worldW / map.cellSize),
+      Math.round(map.worldH / map.cellSize),
+      map.cellSize,
+    )
+    map.paint(this.grid)
     inflate(this.grid, INFLATE_RADIUS)
     // 站点吸附到最近可通行格中心
-    this.stations = STATION_DEFS.map((s) => {
+    this.stations = map.stations.map((s) => {
       const cell = nearestFreeCell(this.grid, worldToCell(this.grid, s.pos.x, s.pos.y))
       const pos = cell ? cellCenter(this.grid, cell.cx, cell.cy) : { ...s.pos }
       return { ...s, pos }
     })
-    const home = this.stations[0].pos
-    this.pose = { x: home.x, y: home.y, theta: -Math.PI / 2 }
-    this.pushEvent('导航仿真就绪：点击地图任意可达点，或一键派送至站点', 'info')
+    this.obstacles = map.makeObstacles()
+    const home =
+      this.stations.find((s) => s.id === map.homeStationId) ?? this.stations[0]
+    this.pose = { x: home.pos.x, y: home.pos.y, theta: -Math.PI / 2 }
+    this.twist = { v: 0, w: 0 }
+    this.steering = 0
+    this.clearMission('idle')
+    this.trace = []
+    this.traveled = 0
+    this.replans = 0
+    this.mapDirty = false
+    this.mapDirtyTimer = 0
+  }
+
+  /** 切换地图（清空当前任务，小车回到新地图出生点） */
+  setMap(id: NavMapId): void {
+    if (id === this.currentMapId) return
+    const map = getNavMap(id)
+    this.applyMap(map)
+    this.pushEvent(`已切换地图 → ${map.label}（${map.subtitle}）`, 'info')
+    this.notify()
   }
 
   /* ---------- 订阅（React useSyncExternalStore） ---------- */
@@ -259,6 +221,7 @@ export class NavSimulator {
       version: this.version,
       running: this.running,
       paused: this.paused,
+      mapId: this.currentMapId,
       phase: this.phase,
       goalLabel: this.goalLabel,
       planMs: this.planMs,
@@ -366,8 +329,10 @@ export class NavSimulator {
   }
 
   setGoalWorld(x: number, y: number): void {
+    const worldW = this.grid.cols * this.grid.cellSize
+    const worldH = this.grid.rows * this.grid.cellSize
     this.setGoal(
-      { x: clamp(x, 0, WORLD_W), y: clamp(y, 0, WORLD_H) },
+      { x: clamp(x, 0, worldW), y: clamp(y, 0, worldH) },
       null,
       `坐标 (${x.toFixed(1)}, ${y.toFixed(1)})`,
     )
@@ -400,7 +365,8 @@ export class NavSimulator {
     if (add) {
       // 不允许压住小车
       const c = cellCenter(this.grid, cx, cy)
-      if (Math.hypot(c.x - this.pose.x, c.y - this.pose.y) < ROBOT_RADIUS + CELL_SIZE) return false
+      if (Math.hypot(c.x - this.pose.x, c.y - this.pose.y) < ROBOT_RADIUS + this.grid.cellSize)
+        return false
     }
     setCell(this.grid, cx, cy, add ? 1 : 0)
     inflate(this.grid, INFLATE_RADIUS)
@@ -420,18 +386,7 @@ export class NavSimulator {
   }
 
   resetWorld(): void {
-    paintDefaultWorld(this.grid)
-    inflate(this.grid, INFLATE_RADIUS)
-    this.obstacles = makeDynObstacles()
-    const home = this.stations[0].pos
-    this.pose = { x: home.x, y: home.y, theta: -Math.PI / 2 }
-    this.twist = { v: 0, w: 0 }
-    this.steering = 0
-    this.clearMission('idle')
-    this.trace = []
-    this.traveled = 0
-    this.replans = 0
-    this.mapDirty = false
+    this.applyMap(getNavMap(this.currentMapId))
     this.pushEvent('地图与小车已重置', 'info')
     this.notify()
   }

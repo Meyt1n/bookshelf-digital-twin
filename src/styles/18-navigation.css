@@ -17,6 +17,50 @@
   flex-direction: column;
 }
 
+/* 地图切换页签 */
+.navp-tabs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.navp-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.22s;
+}
+
+.navp-tab i {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.navp-tab:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.navp-tab.active {
+  border-color: rgba(34, 211, 238, 0.55);
+  background: rgba(34, 211, 238, 0.1);
+  color: var(--cyan-bright);
+}
+
+.navp-tab.active i {
+  color: var(--cyan-bright);
+}
+
 .navp-canvas-wrap {
   position: relative;
   flex: 1;

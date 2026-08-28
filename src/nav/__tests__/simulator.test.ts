@@ -43,8 +43,18 @@ describe('simulator end-to-end smoke', () => {
     }
 
     const ui = navSimulator.getUiSnapshot()
-    navSimulator.stop()
     expect(ui.traveled).toBeGreaterThan(3)
     expect(ui.speed).toBe(0)
+
+    // 切到仓库地图：穿巷道抵达拣选区与发货台（验证阿克曼转弯半径可行）
+    navSimulator.setMap('warehouse')
+    for (const id of ['picking', 'shipping']) {
+      navSimulator.dispatchTo(id)
+      expect(navSimulator.getUiSnapshot().phase).toBe('moving')
+      runUntilArrived(`warehouse:${id}`)
+    }
+
+    navSimulator.setMap('library')
+    navSimulator.stop()
   })
 })

@@ -5,6 +5,7 @@ import {
   useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
+import { NAV_MAPS, getNavMap } from '../nav/maps'
 import {
   DEFAULT_LAYERS,
   canvasToWorld,
@@ -130,6 +131,7 @@ export function NavigationPage() {
   }
 
   const hint = EDIT_MODES.find((m) => m.id === editMode)?.hint ?? ''
+  const mapDef = getNavMap(ui.mapId)
 
   return (
     <div className="page navp-page">
@@ -141,11 +143,27 @@ export function NavigationPage() {
             </h2>
             <span className="panel-hint">A* 全局规划 · 阿克曼纯追踪 · DWA 局部避障</span>
           </header>
+          <div className="navp-tabs" role="tablist" aria-label="导航地图切换">
+            {NAV_MAPS.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                role="tab"
+                aria-selected={ui.mapId === m.id}
+                className={`navp-tab ${ui.mapId === m.id ? 'active' : ''}`}
+                title={m.subtitle}
+                onClick={() => navSimulator.setMap(m.id)}
+              >
+                <i>{m.icon}</i>
+                {m.label}
+              </button>
+            ))}
+          </div>
           <div className="navp-canvas-wrap" ref={wrapRef}>
             <canvas
               ref={canvasRef}
               className="navp-canvas"
-              aria-label="配送导航 2D 地图：图书馆楼层 19.2 × 11.2 米"
+              aria-label={`配送导航 2D 地图：${mapDef.subtitle}`}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={endPaint}

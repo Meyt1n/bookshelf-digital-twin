@@ -74,3 +74,33 @@ export type NavEvent = {
   text: string
   kind: 'info' | 'ok' | 'warn' | 'bad'
 }
+
+/** 可切换的导航地图 */
+export type NavMapId = 'library' | 'warehouse' | 'exhibition'
+
+/**
+ * 导航地图定义。世界尺寸可各不相同，仿真器按 worldW/worldH ÷ cellSize
+ * 动态创建栅格；stations 会吸附到最近可通行格中心。
+ */
+export type NavMapDef = {
+  id: NavMapId
+  label: string
+  icon: string
+  /** 场地一句话描述（用于画布 aria-label 等） */
+  subtitle: string
+  /** 世界宽（米） */
+  worldW: number
+  /** 世界高（米） */
+  worldH: number
+  /** 米 / 格 */
+  cellSize: number
+  /** 在空栅格上绘制静态障碍（外墙 + 家具 / 货架 / 展位） */
+  paint(grid: OccupancyGrid): void
+  stations: Station[]
+  /** 每次加载生成新的动态障碍（行人 / 叉车 / 观众） */
+  makeObstacles(): DynamicObstacle[]
+  /** 小车出生站点 id（默认取第一个站点） */
+  homeStationId: string
+  /** 孪生桥接锚点：该导航坐标映射到 3D 场景的 CART_HOME */
+  twinAnchor: Vec2
+}
