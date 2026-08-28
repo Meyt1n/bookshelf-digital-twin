@@ -308,7 +308,13 @@
   overflow-x: auto;
   padding: 4px 0 2px;
   margin: 0;
-  scrollbar-width: thin;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.phase-timeline::-webkit-scrollbar {
+  display: none;
 }
 
 .timeline-step {

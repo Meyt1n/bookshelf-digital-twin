@@ -7,9 +7,11 @@
    ============================================================ */
 
 import {
+  BAY_ENTRY_FRONT_Z,
+  BAY_ENTRY_REAR_Z,
+  BAY_ENTRY_TILT,
   BAY_MOUTH_Z,
   BAY_PARK_Z,
-  BAY_REAR_Z,
   CART_DOCK,
   CART_HOME,
   CART_LANE_TO_DOCK,
@@ -168,7 +170,8 @@ export function sampleBookFlight(task: MotionTask | null, now: number): BookFlig
   if (task.action === 'store' && task.phase === 'deliver') {
     t = clamp01((p - 0.36) / 0.24)
     from = robotHeldBookWorld(1)
-    to = bayHeldBookWorld(BAY_REAR_Z)
+    // 落到柜后入口，不要一次塞太深；后续履带再送
+    to = bayHeldBookWorld(BAY_ENTRY_REAR_Z)
   } else if (task.action === 'store' && task.phase === 'handoff') {
     t = clamp01((p - 0.5) / 0.14)
     from = bayHeldBookWorld(BAY_MOUTH_Z)
@@ -184,10 +187,11 @@ export function sampleBookFlight(task: MotionTask | null, now: number): BookFlig
   } else if (task.action === 'take' && task.phase === 'handoff' && p < 0.32) {
     t = clamp01((p - 0.12) / 0.2)
     from = gantryHeldBookWorld(GANTRY_HOME.x, GANTRY_HOME.y, GANTRY_TIP_SHIFT_Z)
-    to = bayHeldBookWorld(BAY_MOUTH_Z)
+    // 落到柜前入口
+    to = bayHeldBookWorld(BAY_ENTRY_FRONT_Z)
   } else if (task.action === 'take' && task.phase === 'handoff') {
     t = clamp01((p - 0.78) / 0.16)
-    from = bayHeldBookWorld(BAY_REAR_Z)
+    from = bayHeldBookWorld(BAY_ENTRY_REAR_Z)
     to = robotHeldBookWorld(1)
   } else {
     return idle
@@ -317,7 +321,15 @@ export function sampleGantry(seg: GantrySeg, task: MotionTask | null, now: numbe
 }
 
 export function sampleBay(task: MotionTask | null, now: number): BayPose {
-  const idle = { clamp: 0.08, bookVisible: false, bookId: null, bookLocalZ: BAY_PARK_Z, belt: 0, scanFlash: 0 }
+  const idle = {
+    clamp: 0.08,
+    bookVisible: false,
+    bookId: null,
+    bookLocalZ: BAY_PARK_Z,
+    belt: 0,
+    scanFlash: 0,
+    bookTilt: 0,
+  }
   if (!task || task.phase === 'fault') return idle
   const p = taskPhaseProgress(task, now)
   const bookId = task.bookId
@@ -325,60 +337,96 @@ export function sampleBay(task: MotionTask | null, now: number): BayPose {
 
   if (task.action === 'store') {
     if (task.phase === 'deliver') {
-      const inward = easeInOut(clamp01((p - 0.6) / 0.22))
-      const clamp = p < 0.72 ? 0.08 : easeInOut(clamp01((p - 0.72) / 0.24))
+      // 书刚落到柜后入口：先倾斜，夹板合拢扶正；此阶段不深送
+      const clamp = p < 0.62 ? 0.08 : easeInOut(clamp01((p - 0.62) / 0.32))
+      const bookTilt = BAY_ENTRY_TILT * (1 - clamp)
       return {
         clamp,
         bookVisible: visible,
         bookId,
-        bookLocalZ: BAY_REAR_Z + (BAY_PARK_Z - BAY_REAR_Z) * inward,
-        belt: visible && inward < 1 ? 1 : 0,
+        bookLocalZ: BAY_ENTRY_REAR_Z,
+        belt: 0,
         scanFlash: 0,
+        bookTilt,
       }
     }
     if (task.phase === 'scan') {
+      // 保持夹紧直立，履带微微送到识别位
+      const inward = easeInOut(clamp01(p / 0.35))
       const flash = p > 0.12 && p < 0.28 ? Math.sin(((p - 0.12) / 0.16) * Math.PI) : 0
       return {
         clamp: 1,
         bookVisible: true,
         bookId,
-        bookLocalZ: BAY_PARK_Z,
-        belt: 0,
+        bookLocalZ: BAY_ENTRY_REAR_Z + (BAY_PARK_Z - BAY_ENTRY_REAR_Z) * inward,
+        belt: inward < 1 ? 1 : 0,
         scanFlash: flash,
+        bookTilt: 0,
       }
     }
     if (task.phase === 'handoff') {
-      // 先松夹板，再由履带把书送往槽口交给夹爪
-      const out = easeInOut(clamp01((p - 0.1) / 0.38))
-      const clamp = p < 0.06 ? 1 : 1 - easeInOut(clamp01((p - 0.06) / 0.16))
+      // 夹住送书到柜前口，交给龙门夹爪时才松开
+      const out = easeInOut(clamp01(p / 0.48))
+      const handing = p >= 0.5
+      const clamp = handing ? 1 - easeInOut(clamp01((p - 0.5) / 0.12)) : 1
       return {
-        clamp,
+        clamp: Math.max(clamp, 0.08),
         bookVisible: visible,
         bookId,
         bookLocalZ: BAY_PARK_Z + (BAY_MOUTH_Z - BAY_PARK_Z) * out,
-        belt: visible && out < 1 ? 1 : 0,
+        belt: visible && !handing && out < 1 ? 1 : 0,
         scanFlash: 0,
+        bookTilt: 0,
       }
     }
   } else if (task.action === 'take' && task.phase === 'handoff') {
-    // 履带收书 → 夹板从宽到窄合拢固定 → 顿一下 → 松开 → 履带送柜后交机器人
-    let localZ = BAY_MOUTH_Z
-    let clamp = 0.08
-    let belt = 0
-    if (p < 0.46) {
-      const inward = easeInOut(clamp01((p - 0.32) / 0.14))
-      localZ = BAY_MOUTH_Z + (BAY_PARK_Z - BAY_MOUTH_Z) * inward
-      belt = visible ? -1 : 0
-    } else if (p < 0.68) {
-      localZ = BAY_PARK_Z
-      clamp = easeInOut(clamp01((p - 0.46) / 0.16))
-    } else {
-      const out = easeInOut(clamp01((p - 0.72) / 0.06))
-      localZ = BAY_PARK_Z + (BAY_REAR_Z - BAY_PARK_Z) * out
-      clamp = 1 - easeInOut(clamp01((p - 0.68) / 0.08))
-      belt = visible && p >= 0.72 ? -1 : 0
+    // 柜前刚入口 → 倾斜扶正夹住 → 夹住送柜后 → 交机器人夹爪才松开
+    if (p < 0.32) {
+      return {
+        clamp: 0.08,
+        bookVisible: false,
+        bookId,
+        bookLocalZ: BAY_ENTRY_FRONT_Z,
+        belt: 0,
+        scanFlash: 0,
+        bookTilt: BAY_ENTRY_TILT,
+      }
     }
-    return { clamp, bookVisible: visible, bookId, bookLocalZ: localZ, belt, scanFlash: 0 }
+    if (p < 0.5) {
+      const clamp = easeInOut(clamp01((p - 0.32) / 0.16))
+      return {
+        clamp: Math.max(clamp, 0.08),
+        bookVisible: visible,
+        bookId,
+        bookLocalZ: BAY_ENTRY_FRONT_Z,
+        belt: 0,
+        scanFlash: 0,
+        bookTilt: BAY_ENTRY_TILT * (1 - clamp),
+      }
+    }
+    if (p < 0.78) {
+      const out = easeInOut(clamp01((p - 0.5) / 0.26))
+      return {
+        clamp: 1,
+        bookVisible: visible,
+        bookId,
+        bookLocalZ: BAY_ENTRY_FRONT_Z + (BAY_ENTRY_REAR_Z - BAY_ENTRY_FRONT_Z) * out,
+        belt: visible ? -1 : 0,
+        scanFlash: 0,
+        bookTilt: 0,
+      }
+    }
+    // 交机器人：松开夹板，书飞向车爪
+    const clamp = 1 - easeInOut(clamp01((p - 0.78) / 0.1))
+    return {
+      clamp: Math.max(clamp, 0.08),
+      bookVisible: visible,
+      bookId,
+      bookLocalZ: BAY_ENTRY_REAR_Z,
+      belt: 0,
+      scanFlash: 0,
+      bookTilt: 0,
+    }
   }
   return idle
 }

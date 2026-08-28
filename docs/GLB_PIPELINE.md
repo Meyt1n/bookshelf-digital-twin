@@ -11,23 +11,22 @@
 | `public/model/bookcase-head.glb` | 柔性夹爪（含 `gripper-left` / `gripper-right`） |
 | `public/model/delivery-robot.glb` | 送书机器人 |
 
-运行时仍会按 mesh 名/坐标做轻量网格手术（掏空格口、拆夹板等），**导出时请保持 mesh 命名与坐标系稳定**。
+运行时按 mesh 名/坐标做轻量网格手术（掏空格口、拆夹板等），**导出时请保持 mesh 命名与坐标系稳定**。
 
-## 离线优化（推荐，无需改 Loader）
+当前仓库中的四个 GLB 保持**第一版未压缩**形态，由 `THREE.GLTFLoader` 直读（见 `Bookshelf` / `Gantry` / `DeliveryCart`）。
 
-不引入 Meshopt/Draco 解码器，保持 `THREE.GLTFLoader` 直读：
+## 离线优化（慎用）
 
 ```bash
 npm run optimize:glb
 ```
 
-脚本调用 `@gltf-transform/cli optimize`：weld / dedup / prune 等，原地覆盖 `public/model/*.glb`。
+若对上述资产做 Meshopt 压缩，必须：
 
-若需进一步压缩（会改运行时）：
+- `--join false`：保留命名 mesh
+- `--simplify false`：保留三角面与 CAD 坐标，否则大隔间夹板拆分 / 掏空会失效
 
-1. `gltf-transform optimize in.glb out.glb --compress meshopt`
-2. 在场景中接入 `MeshoptDecoder`（或迁移到 `@react-three/drei` `useGLTF`）
-3. 回归夹爪开合与大隔间掏空逻辑
+更稳妥的做法是继续使用未压缩 GLB；压缩后还可能因 quantize 节点矩阵导致分件拆出后缩放丢失。
 
 ## 前端加载约定
 
