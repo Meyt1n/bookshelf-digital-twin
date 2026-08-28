@@ -69,6 +69,8 @@ export type NavUiSnapshot = {
   speedScale: number
   /** 孪生同步开关（默认开）：由 twinBridge 读取并推送位姿到 3D 场景 */
   twinSync: boolean
+  /** 当前任务的联动 ID（孪生任务 / 演示剧本派送时 = 任务 id），无联动为 null */
+  correlationId: string | null
   events: NavEvent[]
 }
 
@@ -130,6 +132,8 @@ export class NavSimulator {
   private obstacles: DynamicObstacle[] = []
   private dynEnabled = true
   private twinSync = true
+  /** 当前任务的联动 ID（见 NavUiSnapshot.correlationId） */
+  private correlationId: string | null = null
 
   private trace: Vec2[] = []
   private traceTimer = 0
@@ -238,6 +242,7 @@ export class NavSimulator {
       dynEnabled: this.dynEnabled,
       speedScale: this.speedScale,
       twinSync: this.twinSync,
+      correlationId: this.correlationId,
       events: this.events,
     }
     return this.uiCache
@@ -326,10 +331,11 @@ export class NavSimulator {
 
   /* ---------- 指令 API ---------- */
 
-  dispatchTo(stationId: string): void {
+  /** 派送到站点；correlationId 用于孪生任务 / 演示剧本的跨系统回放关联 */
+  dispatchTo(stationId: string, correlationId?: string): void {
     const st = this.stations.find((s) => s.id === stationId)
     if (!st) return
-    this.setGoal(st.pos, st.id, st.label)
+    this.setGoal(st.pos, st.id, st.label, correlationId ?? null)
   }
 
   setGoalWorld(x: number, y: number): void {
@@ -419,6 +425,7 @@ export class NavSimulator {
     this.goal = null
     this.goalStationId = null
     this.goalLabel = null
+    this.correlationId = null
     this.rawPath = []
     this.path = []
     this.pursuitIndex = 0
@@ -428,7 +435,12 @@ export class NavSimulator {
     this.replanCooldown = 0
   }
 
-  private setGoal(pos: Vec2, stationId: string | null, label: string): void {
+  private setGoal(
+    pos: Vec2,
+    stationId: string | null,
+    label: string,
+    correlationId: string | null = null,
+  ): void {
     const cell = nearestFreeCell(this.grid, worldToCell(this.grid, pos.x, pos.y))
     if (!cell) {
       this.phase = 'unreachable'
@@ -439,12 +451,14 @@ export class NavSimulator {
     this.goal = cellCenter(this.grid, cell.cx, cell.cy)
     this.goalStationId = stationId
     this.goalLabel = label
+    this.correlationId = correlationId
     this.trace = []
     this.blockedFor = 0
     this.replanCooldown = 0
     if (this.plan(true)) {
+      const corrTag = correlationId ? ` · 联动 ${correlationId}` : ''
       this.pushEvent(
-        `开始配送 → ${label}（路径 ${this.pathLen.toFixed(1)}m · 规划 ${this.planMs.toFixed(1)}ms · 展开 ${this.expanded} 节点）`,
+        `开始配送 → ${label}（路径 ${this.pathLen.toFixed(1)}m · 规划 ${this.planMs.toFixed(1)}ms · 展开 ${this.expanded} 节点${corrTag}）`,
         'ok',
       )
     }

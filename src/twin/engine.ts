@@ -1,36 +1,9 @@
 import { BOOKS, MEMBERS } from '../catalog'
 import type { Member } from '../catalog'
-import {
-  CART_DOCK,
-  CART_HOME,
-  CART_LANE_TO_DOCK,
-  CELLS_PER_FLOOR,
-  FLOORS,
-  GANTRY_CARRY_SWING,
-  GANTRY_HOME,
-  GANTRY_SWING_GUIDE,
-  GANTRY_SWING_IDLE,
-  GANTRY_SWING_RECEIVE,
-  GANTRY_TIP_CLAMP_SWING,
-  GANTRY_TIP_SHIFT_Z,
-  HEAD_REST,
-  BAY_MOUTH_Z,
-  BAY_PARK_Z,
-  BAY_REAR_Z,
-  SLOT_MOUTH_LOCAL_Z,
-  bayHeldBookWorld,
-  laminateBookWorld,
-  cellX,
-  cellY,
-  cellZ,
-  clamp01,
-  easeInOut,
-  gantryHeldBookWorld,
-  lerpPath,
-  lerpVec3,
-  robotHeldBookWorld,
-  slotHeldBookWorld,
-} from '../scene/layout'
+import { CELLS_PER_FLOOR, FLOORS, GANTRY_HOME, HEAD_REST } from '../scene/layout'
+import { PHASE_MS, type GantrySeg, type NavCartOverride } from './kinematics'
+import * as kin from './kinematics'
+import { tickTask as tickTaskMachine, type TaskHost } from './taskMachine'
 import type {
   BookInfo,
   BayPose,
@@ -50,7 +23,6 @@ import type {
   SelfCheck,
   StoredMeta,
   TaskAction,
-  TaskPhase,
   TelemetryPoint,
   TrendDay,
   TwinEvent,
@@ -89,62 +61,12 @@ export const ACK_LABELS: Record<number, string> = {
   [ACK_PENDING]: 'PENDING',
 }
 
-const PHASE_MS: Record<string, number> = {
-  dispatch: 900,
-  ack: 700,
-  deliver: 3400,
-  scan: 3200,
-  handoff: 2800,
-  lift: 1500,
-  traverse: 1300,
-  operate: 2800,
-  retract: 1300,
-  return: 1500,
-  done: 500,
-  fault: 1300,
-}
-
-export const PHASE_LABELS: Record<string, string> = {
-  dispatch: '指令下发',
-  ack: '控制器应答',
-  deliver: '柜后直送大隔间',
-  scan: '夹板拍照识别',
-  handoff: '履带交夹爪',
-  lift: '横梁升降',
-  traverse: '夹爪横移',
-  operate: '夹爪履带送入',
-  retract: '夹爪回左侧',
-  return: '回到二层起点',
-  done: '完成',
-  fault: '急停',
-}
-
-/** 存书：机器人把书放入大隔间 → 夹板夹紧顿住 → 摄像头拍照识别 → 履带交夹爪 → 再送入目标格。 */
-export function taskFlow(action: TaskAction): TaskPhase[] {
-  if (action === 'store') {
-    return ['dispatch', 'ack', 'deliver', 'scan', 'handoff', 'lift', 'traverse', 'operate', 'retract', 'return']
-  }
-  return ['dispatch', 'ack', 'lift', 'traverse', 'operate', 'retract', 'return', 'handoff']
-}
-
-export function taskPhaseProgress(task: MotionTask, now = performance.now()): number {
-  return clamp01((now - task.phaseStart) / (PHASE_MS[task.phase] ?? 1))
-}
+/** 相位常量与助手已抽取至 kinematics.ts；此处保持原公共 API 再导出 */
+export { PHASE_LABELS, taskFlow, taskPhaseProgress } from './kinematics'
 
 const UV_DURATION = 6000
 const LAMINATE_DURATION = 10000
 const MODULE_RESET_MS = 2400
-
-type GantrySeg = {
-  fromX: number
-  fromY: number
-  fromZ: number
-  toX: number
-  toY: number
-  toZ: number
-  start: number
-  dur: number
-}
 
 type SimBackup = {
   compartments: Compartment[]
@@ -513,132 +435,30 @@ export class TwinEngine {
     }
   }
 
+  /** 引擎注入给任务状态机的副作用回调（taskMachine.ts 保持无引擎依赖） */
+  private taskHost: TaskHost = {
+    pushEvent: (kind, level, text) => this.pushEvent(kind, level, text),
+    moveGantryTo: (now, toX, toY, toZ, dur) => this.moveGantryTo(now, toX, toY, toZ, dur),
+    beginBayScan: (task) => this.beginBayScan(task),
+    applyInventoryChange: (task) => this.applyInventoryChange(task),
+    acknowledge: () => {
+      this.registers.newCmdFlag = 0
+      this.registers.ack = ACK_OK
+    },
+    noteCompleted: (task) => {
+      if (task.action === 'store') this.stats.storeCount++
+      else this.stats.takeCount++
+      this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
+      this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
+      this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
+    },
+  }
+
+  /** 相位推进委托给 taskMachine；返回 false 表示任务终结 */
   private tickTask(now: number): void {
-    const task = this.task
-    if (!task) return
-    const dur = PHASE_MS[task.phase]
-    if (now - task.phaseStart < dur) return
-
-    const layer = task.floor === 1 ? '上层' : '下层'
-    const slotY = cellY(task.floor)
-    const slotX = cellX(task.cell)
-    const slotZ = cellZ(task.floor)
-
-    switch (task.phase) {
-      case 'dispatch': {
-        this.registers.newCmdFlag = 0
-        this.registers.ack = ACK_OK
-        task.phase = 'ack'
-        task.phaseStart = now
-        this.pushEvent('motion', 'info', `STM32 应答 ACK=0x00 (OK) · 任务 ${task.id} 进入执行队列`)
-        break
-      }
-      case 'ack': {
-        if (task.action === 'store') {
-          task.phase = 'deliver'
-          task.phaseStart = now
-          this.pushEvent('motion', 'info', `送书机器人从柜后将《${task.title}》直送第二层左侧大隔间 · 夹爪原地待命`)
-        } else {
-          task.phase = 'lift'
-          task.phaseStart = now
-          this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.lift)
-          this.pushEvent('motion', 'info', `横梁竖直升降 → ${layer}底板`)
-        }
-        break
-      }
-      case 'deliver': {
-        if (task.action === 'store') {
-          task.phase = 'scan'
-          task.phaseStart = now
-          this.beginBayScan(task)
-          this.pushEvent('motion', 'info', `夹板夹紧《${task.title}》· 顿住，大隔间上方摄像头拍照识别`)
-        } else {
-          task.phase = 'handoff'
-          task.phaseStart = now
-        }
-        break
-      }
-      case 'scan': {
-        task.phase = 'handoff'
-        task.phaseStart = now
-        this.pushEvent('motion', 'info', `识别完成 · 大隔间履带将《${task.title}》送到夹爪`)
-        break
-      }
-      case 'handoff': {
-        if (task.action === 'store') {
-          task.phase = 'lift'
-          task.phaseStart = now
-          this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.lift)
-          this.pushEvent('motion', 'info', `横梁竖直升降 → ${layer}底板`)
-        } else {
-          task.phase = 'done'
-          task.phaseStart = now
-          this.stats.takeCount++
-          this.pushEvent('take', 'ok', `取书完成 ·《${task.title}》已在第二层左侧大隔间交送书机器人（${task.actor}）`)
-          this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
-          this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
-          this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
-        }
-        break
-      }
-      case 'lift': {
-        task.phase = 'traverse'
-        task.phaseStart = now
-        this.moveGantryTo(now, slotX, slotY, slotZ, PHASE_MS.traverse)
-        this.pushEvent('motion', 'info', `夹爪沿丝杆横移 → ${layer} ${task.cell} 号隔间`)
-        break
-      }
-      case 'traverse': {
-        task.phase = 'operate'
-        task.phaseStart = now
-        this.pushEvent(
-          'motion',
-          'info',
-          task.action === 'store'
-            ? `夹爪到位 · 内履带将《${task.title}》送到槽口，隔间履带送入深处`
-            : `夹爪到位 · 隔间履带将《${task.title}》送到槽口，内履带卷入`,
-        )
-        break
-      }
-      case 'operate': {
-        this.applyInventoryChange(task)
-        task.phase = 'retract'
-        task.phaseStart = now
-        this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.retract)
-        this.pushEvent('motion', 'info', `夹爪沿丝杆回到左侧大隔间`)
-        break
-      }
-      case 'retract': {
-        task.phase = 'return'
-        task.phaseStart = now
-        this.moveGantryTo(now, GANTRY_HOME.x, GANTRY_HOME.y, HEAD_REST.z, PHASE_MS.return)
-        this.pushEvent('motion', 'info', `横梁回到第二层左侧大隔间`)
-        break
-      }
-      case 'return': {
-        if (task.action === 'take') {
-          task.phase = 'handoff'
-          task.phaseStart = now
-          this.pushEvent('motion', 'info', `夹爪将《${task.title}》放回左侧大隔间 · 夹板固定后交送书机器人`)
-        } else {
-          task.phase = 'done'
-          task.phaseStart = now
-          this.stats.storeCount++
-          this.pushEvent('store', 'ok', `存书完成 ·《${task.title}》已入 ${task.floor} 层 ${task.cell} 号格（${task.actor}）`)
-          this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
-          this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
-          this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
-        }
-        break
-      }
-      case 'done': {
-        this.task = null
-        break
-      }
-      case 'fault': {
-        this.task = null
-        break
-      }
+    if (!this.task) return
+    if (!tickTaskMachine(this.task, this.taskHost, now)) {
+      this.task = null
     }
   }
 
@@ -717,10 +537,10 @@ export class TwinEngine {
   /* ---------------- 导航联动（配送导航页经 twinBridge 桥接） ---------------- */
 
   /** 2D 导航推送的底盘位姿覆盖：只接管 x/z/yaw/moving，机构动画不受影响 */
-  private navOverride: { x: number; z: number; yaw: number; moving: boolean } | null = null
+  private navOverride: NavCartOverride | null = null
 
   /** 设置 / 清除导航位姿覆盖（null = 恢复任务驱动的小车动画） */
-  setNavCartOverride(pose: { x: number; z: number; yaw: number; moving: boolean } | null): void {
+  setNavCartOverride(pose: NavCartOverride | null): void {
     this.navOverride = pose
   }
 
@@ -731,6 +551,12 @@ export class TwinEngine {
   /** 导航侧事件写入孪生事件流（如「小车前往服务台」） */
   noteNavEvent(text: string, level: EventLevel = 'info'): void {
     this.pushEvent('motion', level, text)
+    this.emit()
+  }
+
+  /** 演示剧本等编排层写入事件流（各幕进度对观众可见） */
+  noteScriptEvent(text: string, level: EventLevel = 'info'): void {
+    this.pushEvent('system', level, text)
     this.emit()
   }
 
@@ -794,7 +620,11 @@ export class TwinEngine {
 
   /** 指令台：将指定图书存入指定格口 */
   commandStoreTo(cid: number, bookId: number): void {
-    if (this.mode === 'live') return
+    if (this.mode === 'live') {
+      this.pushEvent('system', 'warn', '联机模式请在实体端存书')
+      this.emit()
+      return
+    }
     this.autonomous = false
     if (this.task || this.ocr) {
       this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
@@ -808,7 +638,11 @@ export class TwinEngine {
 
   /** 图书资产页：指定图书入库（顺位分配格口） */
   commandStoreBook(bookId: number): void {
-    if (this.mode === 'live') return
+    if (this.mode === 'live') {
+      this.pushEvent('system', 'warn', '联机模式请在实体端存书')
+      this.emit()
+      return
+    }
     this.autonomous = false
     if (this.task || this.ocr) {
       this.pushEvent('system', 'warn', '当前已有任务在执行，请稍候')
@@ -993,13 +827,9 @@ export class TwinEngine {
     if (this.mode === 'live') return
     this.pushEvent('link', 'info', `正在探测实体书架服务 ${this.apiBase || '(同源 /api)'} ...`)
     this.emit()
-    const ok = await this.pollLive(true)
-    if (!ok) {
-      this.pushEvent('link', 'warn', '联机失败 · Flask 服务不可达，保持仿真模式')
-      this.emit()
-      return
-    }
-    this.simBackup = {
+    // 先备份仿真世界：探测成功的 pollLive 会立刻套用实体快照，
+    // 备份放在探测之后会把联机数据当成"仿真现场"，退出联机时无法还原
+    const backup: SimBackup = {
       compartments: this.compartments.map((c) => ({ ...c })),
       stored: { ...this.stored },
       booksById: { ...this.booksById },
@@ -1010,6 +840,13 @@ export class TwinEngine {
       storeCount: this.stats.storeCount,
       takeCount: this.stats.takeCount,
     }
+    const ok = await this.pollLive(true)
+    if (!ok) {
+      this.pushEvent('link', 'warn', '联机失败 · Flask 服务不可达，保持仿真模式')
+      this.emit()
+      return
+    }
+    this.simBackup = backup
     this.mode = 'live'
     this.autonomous = false
     this.pushEvent('link', 'ok', '已联机 · 孪生体与实体书架数据同步中')
@@ -1042,8 +879,20 @@ export class TwinEngine {
       this.stats.takeCount = this.simBackup.takeCount
       this.simBackup = null
     }
+    this.clearSyntheticBooks()
     this.pushEvent('link', 'info', '已断开联机 · 回到仿真模式')
     this.emit()
+  }
+
+  /**
+   * 清理联机期间为实体书目生成的合成条目（id ≥ 900）。
+   * 快照回滚通常已把 booksById 还原，此处兜底防止合成书泄漏进仿真世界。
+   */
+  private clearSyntheticBooks(): void {
+    for (const key of Object.keys(this.booksById)) {
+      const id = Number(key)
+      if (id >= 900) delete this.booksById[id]
+    }
   }
 
   /* ---------------- 实体温湿度遥测 ---------------- */
@@ -1354,448 +1203,31 @@ export class TwinEngine {
     void this.pollLive(false)
   }
 
-  /* ---------------- 3D 采样（每帧调用，不经过 React） ---------------- */
+  /* ---------------- 3D 采样（每帧调用，不经过 React）：薄委托到 kinematics.ts ---------------- */
 
   /** 当前书在哪个机构上；flight = 两个机构之间的过渡 */
   sampleBookCarrier(now: number): BookCarrier | null {
-    const task = this.task
-    if (!task || task.phase === 'fault') return null
-    const p = taskPhaseProgress(task, now)
-    if (task.action === 'store') {
-      if (task.phase === 'dispatch' || task.phase === 'ack') return 'cart'
-      if (task.phase === 'deliver') {
-        if (p < 0.36) return 'cart'
-        if (p < 0.6) return 'flight'
-        return 'bay'
-      }
-      if (task.phase === 'scan') return 'bay'
-      if (task.phase === 'handoff') {
-        if (p < 0.5) return 'bay'
-        if (p < 0.64) return 'flight'
-        return 'gantry'
-      }
-      if (task.phase === 'lift' || task.phase === 'traverse') return 'gantry'
-      if (task.phase === 'operate') {
-        if (p < 0.42) return 'gantry'
-        if (p < 0.58) return 'flight'
-        return 'slot'
-      }
-      if (task.phase === 'retract' || task.phase === 'return' || task.phase === 'done') return 'slot'
-      return null
-    }
-    if (task.phase === 'dispatch' || task.phase === 'ack' || task.phase === 'lift' || task.phase === 'traverse') {
-      return 'slot'
-    }
-    if (task.phase === 'operate') {
-      if (p < 0.34) return 'slot'
-      if (p < 0.48) return 'flight'
-      return 'gantry'
-    }
-    if (task.phase === 'retract' || task.phase === 'return') return 'gantry'
-    if (task.phase === 'handoff') {
-      if (p < 0.12) return 'gantry'
-      if (p < 0.32) return 'flight'
-      if (p < 0.78) return 'bay'
-      if (p < 0.94) return 'flight'
-      return 'cart'
-    }
-    if (task.phase === 'done') return 'cart'
-    return null
+    return kin.sampleBookCarrier(this.task, now)
   }
 
   sampleBookFlight(now: number): BookFlight {
-    const idle: BookFlight = { active: false, bookId: null, x: 0, y: 0, z: 0, t: 0 }
-    const task = this.task
-    if (!task || task.phase === 'fault') return idle
-    if (this.sampleBookCarrier(now) !== 'flight') return idle
-    const p = taskPhaseProgress(task, now)
-    const slotX = cellX(task.cell)
-    const slotY = cellY(task.floor)
-
-    let from = { x: 0, y: 0, z: 0 }
-    let to = { x: 0, y: 0, z: 0 }
-    let t = 0
-
-    if (task.action === 'store' && task.phase === 'deliver') {
-      t = clamp01((p - 0.36) / 0.24)
-      from = robotHeldBookWorld(1)
-      to = bayHeldBookWorld(BAY_REAR_Z)
-    } else if (task.action === 'store' && task.phase === 'handoff') {
-      t = clamp01((p - 0.5) / 0.14)
-      from = bayHeldBookWorld(BAY_MOUTH_Z)
-      to = gantryHeldBookWorld(GANTRY_HOME.x, GANTRY_HOME.y, GANTRY_TIP_SHIFT_Z)
-    } else if (task.action === 'store' && task.phase === 'operate') {
-      t = clamp01((p - 0.42) / 0.16)
-      from = gantryHeldBookWorld(slotX, slotY, GANTRY_TIP_SHIFT_Z)
-      to = slotHeldBookWorld(task.floor, task.cell, SLOT_MOUTH_LOCAL_Z)
-    } else if (task.action === 'take' && task.phase === 'operate') {
-      t = clamp01((p - 0.34) / 0.14)
-      from = slotHeldBookWorld(task.floor, task.cell, SLOT_MOUTH_LOCAL_Z)
-      to = gantryHeldBookWorld(slotX, slotY, GANTRY_TIP_SHIFT_Z)
-    } else if (task.action === 'take' && task.phase === 'handoff' && p < 0.32) {
-      t = clamp01((p - 0.12) / 0.2)
-      from = gantryHeldBookWorld(GANTRY_HOME.x, GANTRY_HOME.y, GANTRY_TIP_SHIFT_Z)
-      to = bayHeldBookWorld(BAY_MOUTH_Z)
-    } else if (task.action === 'take' && task.phase === 'handoff') {
-      t = clamp01((p - 0.78) / 0.16)
-      from = bayHeldBookWorld(BAY_REAR_Z)
-      to = robotHeldBookWorld(1)
-    } else {
-      return idle
-    }
-
-    const pos = lerpVec3(from, to, t)
-    return { active: true, bookId: task.bookId, x: pos.x, y: pos.y, z: pos.z, t }
+    return kin.sampleBookFlight(this.task, now)
   }
 
   sampleLaminate(now: number): LaminatePose {
-    const mod = this.laminate
-    const running = mod.status === 'running'
-    const done = mod.status === 'done'
-    const presenting = this.laminatePresented && this.laminateBookId !== null && !running
-    const progress = running ? clamp01((now - mod.startedAt) / Math.max(mod.duration, 1)) : presenting || done ? 1 : 0
-    const sealed = running ? clamp01((progress - 0.05) / 0.6) : presenting || done ? 1 : 0
-    const book = laminateBookWorld(progress)
-    const heat = running ? 0.28 + 0.72 * Math.sin(Math.min(progress, 0.7) / 0.7 * Math.PI) : 0.06
-    return {
-      progress,
-      running,
-      active: running || done || presenting,
-      presenting,
-      bookId: running || done || presenting ? this.laminateBookId : null,
-      x: book.x,
-      y: book.y,
-      z: book.z,
-      belt: running && progress < 0.98 ? 1 : 0,
-      heat,
-      sealed,
-    }
+    return kin.sampleLaminate(this.laminate, this.laminateBookId, this.laminatePresented, now)
   }
 
   sampleGantry(now: number): GantryPose {
-    const seg = this.gantrySeg
-    const t = seg.dur <= 0 ? 1 : clamp01((now - seg.start) / seg.dur)
-    const k = easeInOut(t)
-    const x = seg.fromX + (seg.toX - seg.fromX) * k
-    const y = seg.fromY + (seg.toY - seg.fromY) * k
-    const z = seg.fromZ + (seg.toZ - seg.fromZ) * k
-
-    let carrying = false
-    let swing = GANTRY_SWING_IDLE
-    let squeeze = false
-    let carryBookId: number | null = null
-    let bookShiftZ = 0
-    let belt = 0
-    const task = this.task
-    if (task && task.phase !== 'fault') {
-      carryBookId = task.bookId
-      const p = taskPhaseProgress(task, now)
-      const onGantry = this.sampleBookCarrier(now) === 'gantry'
-      carrying = onGantry
-      if (task.action === 'store') {
-        if (task.phase === 'deliver' || task.phase === 'scan') {
-          swing = GANTRY_SWING_RECEIVE
-        } else if (task.phase === 'handoff') {
-          if (!onGantry) {
-            swing = GANTRY_SWING_RECEIVE
-          } else if (p < 0.74) {
-            // 书停在爪尖，尖端先合拢夹住
-            swing = -GANTRY_TIP_CLAMP_SWING
-            bookShiftZ = GANTRY_TIP_SHIFT_Z
-          } else if (p < 0.94) {
-            // 内履带把书往后送，两爪保持合拢贴着书
-            const u = easeInOut((p - 0.74) / 0.2)
-            swing = -GANTRY_TIP_CLAMP_SWING
-            bookShiftZ = GANTRY_TIP_SHIFT_Z * (1 - u)
-            belt = 1
-          } else {
-            // 书到爪根，爪尖完全并拢 + 爪垫压紧，夹取完成
-            swing = -GANTRY_CARRY_SWING
-            squeeze = true
-          }
-        } else if (task.phase === 'lift' || task.phase === 'traverse') {
-          swing = onGantry ? -GANTRY_CARRY_SWING : GANTRY_SWING_IDLE
-          squeeze = onGantry
-        } else if (task.phase === 'operate' && onGantry) {
-          if (p < 0.06) {
-            swing = -GANTRY_CARRY_SWING
-            squeeze = true
-          } else {
-            // 放书：张开，内履带把书送向爪尖，惯性滑出
-            swing = GANTRY_SWING_GUIDE
-            bookShiftZ = GANTRY_TIP_SHIFT_Z * easeInOut(clamp01((p - 0.06) / 0.34))
-            belt = -1
-          }
-        }
-      } else if (task.action === 'take') {
-        if (task.phase === 'operate') {
-          if (!onGantry) {
-            swing = GANTRY_SWING_RECEIVE
-          } else if (p < 0.56) {
-            swing = -GANTRY_TIP_CLAMP_SWING
-            bookShiftZ = GANTRY_TIP_SHIFT_Z
-          } else if (p < 0.8) {
-            const u = easeInOut((p - 0.56) / 0.24)
-            swing = -GANTRY_TIP_CLAMP_SWING
-            bookShiftZ = GANTRY_TIP_SHIFT_Z * (1 - u)
-            belt = 1
-          } else {
-            swing = -GANTRY_CARRY_SWING
-            squeeze = true
-          }
-        } else if (task.phase === 'retract' || task.phase === 'return') {
-          swing = onGantry ? -GANTRY_CARRY_SWING : GANTRY_SWING_IDLE
-          squeeze = onGantry
-        } else if (task.phase === 'handoff') {
-          if (onGantry) {
-            if (p < 0.02) {
-              swing = -GANTRY_CARRY_SWING
-              squeeze = true
-            } else {
-              swing = GANTRY_SWING_GUIDE
-              bookShiftZ = GANTRY_TIP_SHIFT_Z * easeInOut(clamp01((p - 0.02) / 0.1))
-              belt = -1
-            }
-          } else {
-            swing = GANTRY_SWING_RECEIVE
-          }
-        }
-      }
-    }
-    return { x, y, z, carrying, swing, squeeze, carryBookId, moving: t < 1, bookShiftZ, belt }
+    return kin.sampleGantry(this.gantrySeg, this.task, now)
   }
 
   sampleBay(now: number): BayPose {
-    const idle = { clamp: 0.08, bookVisible: false, bookId: null, bookLocalZ: BAY_PARK_Z, belt: 0, scanFlash: 0 }
-    const task = this.task
-    if (!task || task.phase === 'fault') return idle
-    const p = taskPhaseProgress(task, now)
-    const bookId = task.bookId
-    const visible = this.sampleBookCarrier(now) === 'bay'
-
-    if (task.action === 'store') {
-      if (task.phase === 'deliver') {
-        const inward = easeInOut(clamp01((p - 0.6) / 0.22))
-        const clamp = p < 0.72 ? 0.08 : easeInOut(clamp01((p - 0.72) / 0.24))
-        return {
-          clamp,
-          bookVisible: visible,
-          bookId,
-          bookLocalZ: BAY_REAR_Z + (BAY_PARK_Z - BAY_REAR_Z) * inward,
-          belt: visible && inward < 1 ? 1 : 0,
-          scanFlash: 0,
-        }
-      }
-      if (task.phase === 'scan') {
-        const flash = p > 0.12 && p < 0.28 ? Math.sin(((p - 0.12) / 0.16) * Math.PI) : 0
-        return {
-          clamp: 1,
-          bookVisible: true,
-          bookId,
-          bookLocalZ: BAY_PARK_Z,
-          belt: 0,
-          scanFlash: flash,
-        }
-      }
-      if (task.phase === 'handoff') {
-        // 先松夹板，再由履带把书送往槽口交给夹爪
-        const out = easeInOut(clamp01((p - 0.1) / 0.38))
-        const clamp = p < 0.06 ? 1 : 1 - easeInOut(clamp01((p - 0.06) / 0.16))
-        return {
-          clamp,
-          bookVisible: visible,
-          bookId,
-          bookLocalZ: BAY_PARK_Z + (BAY_MOUTH_Z - BAY_PARK_Z) * out,
-          belt: visible && out < 1 ? 1 : 0,
-          scanFlash: 0,
-        }
-      }
-    } else if (task.action === 'take' && task.phase === 'handoff') {
-      // 履带收书 → 夹板从宽到窄合拢固定 → 顿一下 → 松开 → 履带送柜后交机器人
-      let localZ = BAY_MOUTH_Z
-      let clamp = 0.08
-      let belt = 0
-      if (p < 0.46) {
-        const inward = easeInOut(clamp01((p - 0.32) / 0.14))
-        localZ = BAY_MOUTH_Z + (BAY_PARK_Z - BAY_MOUTH_Z) * inward
-        belt = visible ? -1 : 0
-      } else if (p < 0.68) {
-        localZ = BAY_PARK_Z
-        clamp = easeInOut(clamp01((p - 0.46) / 0.16))
-      } else {
-        const out = easeInOut(clamp01((p - 0.72) / 0.06))
-        localZ = BAY_PARK_Z + (BAY_REAR_Z - BAY_PARK_Z) * out
-        clamp = 1 - easeInOut(clamp01((p - 0.68) / 0.08))
-        belt = visible && p >= 0.72 ? -1 : 0
-      }
-      return { clamp, bookVisible: visible, bookId, bookLocalZ: localZ, belt, scanFlash: 0 }
-    }
-    return idle
+    return kin.sampleBay(this.task, now)
   }
 
   sampleCart(now: number): CartPose {
-    const base = this.sampleCartFromTask(now)
-    // 导航同步开启时底盘位姿以 2D 导航为准；mast/reach/carrying 等
-    // 机构状态仍由任务逻辑给出，存/取书动画不中断
-    const nav = this.navOverride
-    if (!nav) return base
-    return { ...base, x: nav.x, z: nav.z, yaw: nav.yaw, moving: nav.moving }
-  }
-
-  /** 任务驱动的小车位姿（未开导航同步时的原始行为） */
-  private sampleCartFromTask(now: number): CartPose {
-    const dockYaw = 0
-    const leaveLane = [...CART_LANE_TO_DOCK].reverse()
-    const task = this.task
-
-    const patrol = (): CartPose => {
-      const t = now / 7800
-      return {
-        x: CART_HOME.x + Math.sin(t) * 0.22,
-        z: CART_HOME.z + Math.cos(t) * 0.16,
-        yaw: t,
-        mast: 0.08,
-        reach: 0,
-        carrying: false,
-        clamped: false,
-        carryBookId: null,
-        moving: true,
-      }
-    }
-
-    if (!task || task.phase === 'fault') return patrol()
-
-    const p = taskPhaseProgress(task, now)
-    const bookId = task.bookId
-
-    if (task.action === 'store') {
-      if (task.phase === 'done') return patrol()
-      if (task.phase === 'dispatch' || task.phase === 'ack') {
-        const k = task.phase === 'dispatch' ? 0.5 * p : 0.5 + 0.5 * p
-        const pos = lerpPath(CART_LANE_TO_DOCK, easeInOut(k))
-        const arrived = k > 0.97
-        return {
-          x: arrived ? CART_DOCK.x : pos.x,
-          z: arrived ? CART_DOCK.z : pos.z,
-          yaw: arrived ? dockYaw : pos.yaw,
-          mast: 0.2 + 0.35 * k,
-          reach: 0,
-          carrying: true,
-          clamped: true,
-          carryBookId: bookId,
-          moving: !arrived,
-        }
-      }
-      if (task.phase === 'deliver') {
-        const reach =
-          p < 0.12
-            ? 0
-            : p < 0.36
-              ? easeInOut((p - 0.12) / 0.24)
-              : p < 0.42
-                ? 1
-                : p < 0.64
-                  ? 1 - easeInOut((p - 0.42) / 0.22)
-                  : 0
-        return {
-          x: CART_DOCK.x,
-          z: CART_DOCK.z,
-          yaw: dockYaw,
-          mast: 1,
-          reach,
-          carrying: this.sampleBookCarrier(now) === 'cart',
-          // 臂到位后先松爪，书再凭惯性滑进隔间
-          clamped: p < 0.3,
-          carryBookId: bookId,
-          moving: false,
-        }
-      }
-      if (task.phase === 'scan' || task.phase === 'handoff') {
-        return {
-          x: CART_DOCK.x,
-          z: CART_DOCK.z,
-          yaw: dockYaw,
-          mast: 0.18,
-          reach: 0,
-          carrying: false,
-          clamped: false,
-          carryBookId: null,
-          moving: false,
-        }
-      }
-      const leaveT = task.phase === 'lift' ? easeInOut(p) : 1
-      const pos = lerpPath(leaveLane, leaveT)
-      return {
-        x: pos.x,
-        z: pos.z,
-        yaw: pos.yaw,
-        mast: 0.08,
-        reach: 0,
-        carrying: false,
-        clamped: false,
-        carryBookId: null,
-        moving: leaveT < 1,
-      }
-    }
-
-    if (['dispatch', 'ack', 'lift', 'traverse', 'operate', 'retract', 'return'].includes(task.phase)) {
-      const order = ['dispatch', 'ack', 'lift', 'traverse', 'operate', 'retract', 'return']
-      const idx = Math.max(0, order.indexOf(task.phase))
-      const k = clamp01((idx + p) / 6.2)
-      const pos = lerpPath(CART_LANE_TO_DOCK, easeInOut(k))
-      const atDock = k > 0.88
-      return {
-        x: atDock ? CART_DOCK.x : pos.x,
-        z: atDock ? CART_DOCK.z : pos.z,
-        yaw: atDock ? dockYaw : pos.yaw,
-        mast: atDock ? 0.45 + 0.55 * clamp01((k - 0.88) / 0.12) : 0.1,
-        reach: 0,
-        carrying: false,
-        clamped: false,
-        carryBookId: null,
-        moving: k < 1,
-      }
-    }
-    if (task.phase === 'handoff') {
-      const onCart = this.sampleBookCarrier(now) === 'cart'
-      const leaveT = p < 0.94 ? 0 : easeInOut((p - 0.94) / 0.06)
-      const pos = lerpPath(leaveLane, leaveT)
-      const reach =
-        p < 0.7
-          ? 0
-          : p < 0.78
-            ? easeInOut((p - 0.7) / 0.08)
-            : p < 0.94
-              ? 1
-              : Math.max(0, 1 - easeInOut((p - 0.94) / 0.06))
-      return {
-        x: p < 0.94 ? CART_DOCK.x : pos.x,
-        z: p < 0.94 ? CART_DOCK.z : pos.z,
-        yaw: p < 0.94 ? dockYaw : pos.yaw,
-        mast: p < 0.94 ? 1 : 0.12,
-        reach,
-        carrying: onCart,
-        // 书滑进钳口落稳后再合爪
-        clamped: p >= 0.96,
-        carryBookId: bookId,
-        moving: p >= 0.94,
-      }
-    }
-    if (task.phase === 'done') {
-      const pos = lerpPath(leaveLane, 1)
-      return {
-        x: pos.x,
-        z: pos.z,
-        yaw: pos.yaw,
-        mast: 0.08,
-        reach: 0,
-        carrying: true,
-        clamped: true,
-        carryBookId: bookId,
-        moving: false,
-      }
-    }
-    return patrol()
+    return kin.sampleCart(this.task, this.navOverride, now)
   }
 }
 

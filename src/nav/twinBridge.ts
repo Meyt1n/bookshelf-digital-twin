@@ -18,6 +18,7 @@
    ============================================================ */
 
 import { PHASE_LABELS, twinEngine } from '../twin/engine'
+import { linkNavMission, noteNavPhase } from '../twin/taskHistory'
 import type { TaskPhase } from '../types'
 import { getNavMap } from './maps'
 import { navSimulator } from './simulator'
@@ -65,12 +66,14 @@ class TwinBridge {
       this.lastGoalLabel = null
       return
     }
-    // 新目标下达 → 写入孪生事件流
+    // 新目标下达 → 写入孪生事件流；有联动 ID 时同步写入任务回放时间线
     if (ui.phase === 'moving' && ui.goalLabel && ui.goalLabel !== this.lastGoalLabel) {
       this.lastGoalLabel = ui.goalLabel
       twinEngine.noteNavEvent(`配送导航联动 · 小车前往「${ui.goalLabel}」`)
+      if (ui.correlationId) noteNavPhase(ui.correlationId, `前往「${ui.goalLabel}」`)
     } else if (ui.phase === 'arrived' && this.lastGoalLabel) {
       twinEngine.noteNavEvent(`配送导航联动 · 已送达「${this.lastGoalLabel}」`, 'ok')
+      if (ui.correlationId) noteNavPhase(ui.correlationId, `已送达「${this.lastGoalLabel}」`)
       this.lastGoalLabel = null
     } else if (ui.phase === 'idle') {
       this.lastGoalLabel = null
@@ -103,7 +106,9 @@ class TwinBridge {
         'info',
       )
       if (ui.running && navIdle && navSimulator.mapId === 'library') {
-        navSimulator.dispatchTo('stacks')
+        // 联动 ID = 孪生任务 id：回放抽屉据此拼接导航阶段
+        navSimulator.dispatchTo('stacks', task.id)
+        linkNavMission(task.id, task.id)
       }
       return
     }
@@ -120,7 +125,8 @@ class TwinBridge {
         navIdle &&
         navSimulator.mapId === 'library'
       ) {
-        navSimulator.dispatchTo('charge')
+        navSimulator.dispatchTo('charge', task.id)
+        linkNavMission(task.id, task.id)
       }
     }
   }
@@ -131,4 +137,42 @@ const bridge = new TwinBridge()
 /** 导航页挂载时调用；幂等，模块常驻后跨页保持同步 */
 export function initTwinBridge(): void {
   bridge.init()
+}
+
+/* ---------- 演示剧本编排接口（demoScript 经此触达导航，不直连 simulator） ---------- */
+
+/**
+ * 全流程演示前置：桥接初始化、切到图书馆地图、确保 rAF 循环运行。
+ * 演示结束后不主动停帧循环：总览小地图可继续跟随，且避免与
+ * 导航页挂载周期的 start/stop 抢占（页面卸载会自行 stop）。
+ */
+export function ensureNavSimForDemo(): void {
+  bridge.init()
+  if (navSimulator.mapId !== 'library') navSimulator.setMap('library')
+  if (!navSimulator.getUiSnapshot().running) navSimulator.start()
+}
+
+/**
+ * 演示派送：若小车已在前往同一站点（如桥接联动的自动返航），
+ * 不重复下达。correlationId 关联孪生任务回放。
+ * 返回任务是否成功进入配送中。
+ */
+export function demoDispatchStation(stationId: string, correlationId?: string): boolean {
+  bridge.init()
+  const ui = navSimulator.getUiSnapshot()
+  if (ui.phase === 'moving' && navSimulator.getRenderState().goalStationId === stationId) {
+    return true
+  }
+  navSimulator.dispatchTo(stationId, correlationId)
+  return navSimulator.getUiSnapshot().phase === 'moving'
+}
+
+/** 演示等待用：导航任务阶段（moving / arrived / blocked / unreachable…） */
+export function demoNavPhase(): string {
+  return navSimulator.getUiSnapshot().phase
+}
+
+/** 演示等待用：订阅导航状态变化（simulator 约 4Hz 通知） */
+export function subscribeNavForDemo(fn: () => void): () => void {
+  return navSimulator.subscribe(fn)
 }

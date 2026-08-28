@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { PHASE_LABELS } from '../twin/engine'
-import { isDemoRunning, startDemoScript } from '../twin/demoScript'
+import { isDemoRunning, startDemoScript, startFullDemoScript } from '../twin/demoScript'
 import { commandDeckEqual, selectCommandDeck } from '../twin/selectors'
 import { twinEngine, useTwinSelector } from '../twin/useTwin'
 
@@ -31,6 +31,12 @@ export function CommandDeck() {
     if (live || busy) return
     setDemoOn(true)
     startDemoScript()
+  }
+
+  const runFullDemo = () => {
+    if (live || busy) return
+    setDemoOn(true)
+    startFullDemoScript()
   }
 
   const nowLabel = task
@@ -84,6 +90,16 @@ export function CommandDeck() {
         onClick={runDemo}
       >
         ▶ 演示剧本
+      </button>
+
+      <button
+        type="button"
+        className={`btn btn-cyan ${demoOn ? 'is-running' : ''}`}
+        disabled={busy || live}
+        title="存书 → 2D 导航配送藏书区 → 取书 → 返回充电桩（全链路联动）"
+        onClick={runFullDemo}
+      >
+        ⏩ 全流程演示
       </button>
 
       <span className="deck-divider" />
