@@ -42,6 +42,9 @@ const DevicesPage = lazy(() =>
 const NavigationPage = lazy(() =>
   import('./components/NavigationPage').then((m) => ({ default: m.NavigationPage })),
 )
+const NavMiniMap = lazy(() =>
+  import('./components/NavMiniMap').then((m) => ({ default: m.NavMiniMap })),
+)
 
 type DrawerId = 'left' | 'right' | null
 
@@ -112,6 +115,8 @@ function OverviewPage({
   const [followTask, setFollowTask] = useState(true)
   const [docHidden, setDocHidden] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  // 导航小地图默认开启（导航孪生同步默认开）；用户可在视图工具中关闭
+  const [navMini, setNavMini] = useState(true)
   const presetIdxRef = useRef(presetIdx)
   presetIdxRef.current = presetIdx
 
@@ -231,6 +236,17 @@ function OverviewPage({
         <KpiStrip />
         <TaskCard />
         <TaskHistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} />
+        {navMini && (
+          <ErrorBoundary
+            title="导航小地图异常"
+            hint="可关闭后重新打开导航小地图。"
+            fallbackClassName="error-boundary nav-mini-error"
+          >
+            <Suspense fallback={null}>
+              <NavMiniMap active={sceneActive} />
+            </Suspense>
+          </ErrorBoundary>
+        )}
         {hover.hoveredCid !== null && hover.floor !== null && hover.cell !== null && (
           <div className="hover-tip">
             <b>
@@ -291,6 +307,16 @@ function OverviewPage({
               title="任务回放（快捷键 H）"
             >
               回放
+            </button>
+          </div>
+          <div className="view-tool-row">
+            <button
+              type="button"
+              className={`view-tool-btn ${navMini ? 'active' : ''}`}
+              onClick={() => setNavMini((v) => !v)}
+              title="左下角显示 2D 配送导航态势（机器人位姿 / 路径）"
+            >
+              导航小地图
             </button>
           </div>
           <div className="cam-presets" role="toolbar" aria-label="机位预设，数字键 1-0 切换">
