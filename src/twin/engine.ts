@@ -1,16 +1,9 @@
 import { BOOKS, MEMBERS } from '../catalog'
 import type { Member } from '../catalog'
-import {
-  CELLS_PER_FLOOR,
-  FLOORS,
-  GANTRY_HOME,
-  HEAD_REST,
-  cellX,
-  cellY,
-  cellZ,
-} from '../scene/layout'
+import { CELLS_PER_FLOOR, FLOORS, GANTRY_HOME, HEAD_REST } from '../scene/layout'
 import { PHASE_MS, type GantrySeg, type NavCartOverride } from './kinematics'
 import * as kin from './kinematics'
+import { tickTask as tickTaskMachine, type TaskHost } from './taskMachine'
 import type {
   BookInfo,
   BayPose,
@@ -442,132 +435,30 @@ export class TwinEngine {
     }
   }
 
+  /** 引擎注入给任务状态机的副作用回调（taskMachine.ts 保持无引擎依赖） */
+  private taskHost: TaskHost = {
+    pushEvent: (kind, level, text) => this.pushEvent(kind, level, text),
+    moveGantryTo: (now, toX, toY, toZ, dur) => this.moveGantryTo(now, toX, toY, toZ, dur),
+    beginBayScan: (task) => this.beginBayScan(task),
+    applyInventoryChange: (task) => this.applyInventoryChange(task),
+    acknowledge: () => {
+      this.registers.newCmdFlag = 0
+      this.registers.ack = ACK_OK
+    },
+    noteCompleted: (task) => {
+      if (task.action === 'store') this.stats.storeCount++
+      else this.stats.takeCount++
+      this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
+      this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
+      this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
+    },
+  }
+
+  /** 相位推进委托给 taskMachine；返回 false 表示任务终结 */
   private tickTask(now: number): void {
-    const task = this.task
-    if (!task) return
-    const dur = PHASE_MS[task.phase]
-    if (now - task.phaseStart < dur) return
-
-    const layer = task.floor === 1 ? '上层' : '下层'
-    const slotY = cellY(task.floor)
-    const slotX = cellX(task.cell)
-    const slotZ = cellZ(task.floor)
-
-    switch (task.phase) {
-      case 'dispatch': {
-        this.registers.newCmdFlag = 0
-        this.registers.ack = ACK_OK
-        task.phase = 'ack'
-        task.phaseStart = now
-        this.pushEvent('motion', 'info', `STM32 应答 ACK=0x00 (OK) · 任务 ${task.id} 进入执行队列`)
-        break
-      }
-      case 'ack': {
-        if (task.action === 'store') {
-          task.phase = 'deliver'
-          task.phaseStart = now
-          this.pushEvent('motion', 'info', `送书机器人从柜后将《${task.title}》直送第二层左侧大隔间 · 夹爪原地待命`)
-        } else {
-          task.phase = 'lift'
-          task.phaseStart = now
-          this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.lift)
-          this.pushEvent('motion', 'info', `横梁竖直升降 → ${layer}底板`)
-        }
-        break
-      }
-      case 'deliver': {
-        if (task.action === 'store') {
-          task.phase = 'scan'
-          task.phaseStart = now
-          this.beginBayScan(task)
-          this.pushEvent('motion', 'info', `夹板夹紧《${task.title}》· 顿住，大隔间上方摄像头拍照识别`)
-        } else {
-          task.phase = 'handoff'
-          task.phaseStart = now
-        }
-        break
-      }
-      case 'scan': {
-        task.phase = 'handoff'
-        task.phaseStart = now
-        this.pushEvent('motion', 'info', `识别完成 · 大隔间履带将《${task.title}》送到夹爪`)
-        break
-      }
-      case 'handoff': {
-        if (task.action === 'store') {
-          task.phase = 'lift'
-          task.phaseStart = now
-          this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.lift)
-          this.pushEvent('motion', 'info', `横梁竖直升降 → ${layer}底板`)
-        } else {
-          task.phase = 'done'
-          task.phaseStart = now
-          this.stats.takeCount++
-          this.pushEvent('take', 'ok', `取书完成 ·《${task.title}》已在第二层左侧大隔间交送书机器人（${task.actor}）`)
-          this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
-          this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
-          this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
-        }
-        break
-      }
-      case 'lift': {
-        task.phase = 'traverse'
-        task.phaseStart = now
-        this.moveGantryTo(now, slotX, slotY, slotZ, PHASE_MS.traverse)
-        this.pushEvent('motion', 'info', `夹爪沿丝杆横移 → ${layer} ${task.cell} 号隔间`)
-        break
-      }
-      case 'traverse': {
-        task.phase = 'operate'
-        task.phaseStart = now
-        this.pushEvent(
-          'motion',
-          'info',
-          task.action === 'store'
-            ? `夹爪到位 · 内履带将《${task.title}》送到槽口，隔间履带送入深处`
-            : `夹爪到位 · 隔间履带将《${task.title}》送到槽口，内履带卷入`,
-        )
-        break
-      }
-      case 'operate': {
-        this.applyInventoryChange(task)
-        task.phase = 'retract'
-        task.phaseStart = now
-        this.moveGantryTo(now, GANTRY_HOME.x, slotY, slotZ, PHASE_MS.retract)
-        this.pushEvent('motion', 'info', `夹爪沿丝杆回到左侧大隔间`)
-        break
-      }
-      case 'retract': {
-        task.phase = 'return'
-        task.phaseStart = now
-        this.moveGantryTo(now, GANTRY_HOME.x, GANTRY_HOME.y, HEAD_REST.z, PHASE_MS.return)
-        this.pushEvent('motion', 'info', `横梁回到第二层左侧大隔间`)
-        break
-      }
-      case 'return': {
-        if (task.action === 'take') {
-          task.phase = 'handoff'
-          task.phaseStart = now
-          this.pushEvent('motion', 'info', `夹爪将《${task.title}》放回左侧大隔间 · 夹板固定后交送书机器人`)
-        } else {
-          task.phase = 'done'
-          task.phaseStart = now
-          this.stats.storeCount++
-          this.pushEvent('store', 'ok', `存书完成 ·《${task.title}》已入 ${task.floor} 层 ${task.cell} 号格（${task.actor}）`)
-          this.memberActivity[task.actor] = (this.memberActivity[task.actor] ?? 0) + 1
-          this.bookActivity[task.bookId] = (this.bookActivity[task.bookId] ?? 0) + 1
-          this.cellActivity[task.cid] = (this.cellActivity[task.cid] ?? 0) + 1
-        }
-        break
-      }
-      case 'done': {
-        this.task = null
-        break
-      }
-      case 'fault': {
-        this.task = null
-        break
-      }
+    if (!this.task) return
+    if (!tickTaskMachine(this.task, this.taskHost, now)) {
+      this.task = null
     }
   }
 

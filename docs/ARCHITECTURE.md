@@ -16,6 +16,16 @@ R3F scene (scene/) ← useFrame reads twinEngine.sample*
   公共 API 不变。相位常量（`PHASE_MS` / `PHASE_LABELS` / `taskFlow` /
   `taskPhaseProgress`）同在该模块，引擎原样再导出。纯函数可在 node 测试环境
   直接验证相位边界（`src/twin/__tests__/kinematics.test.ts`）。
+- 任务相位状态机已抽取到 [`src/twin/taskMachine.ts`](../src/twin/taskMachine.ts)：
+  `tickTask(task, host, now)` 推进相位并产出事件文案；寄存器 / 库存 / 统计 /
+  龙门段位移 / OCR 启动等副作用经 `TaskHost` 回调注入。引擎 `tickTask` 是薄委托，
+  模块无引擎依赖（`src/twin/__tests__/taskMachine.test.ts` 直接驱动相位推进）。
+- 导航 ↔ 孪生回放关联：`navSimulator.dispatchTo(stationId, correlationId?)`；
+  桥接联动派送用孪生任务 id 作为联动 ID，`taskHistory.linkNavMission` /
+  `noteNavPhase` 把导航阶段拼进任务回放（TaskHistoryDrawer 展示 ⌖ 联动时间线）。
+- 总览页左下角「导航小地图」（`src/components/NavMiniMap.tsx`，React.lazy 装载，
+  ~10fps canvas 重绘）；全流程演示剧本 `startFullDemoScript`（存书 → 导航配送 →
+  取书 → 返航，经 `twinBridge` 演示编排接口触达导航栈，动态 import 保持分包）。
 - 联机边界校验放在 [`src/twin/liveApi.ts`](../src/twin/liveApi.ts)，引擎只消费校验后的数据。
 - 相机预设独立于重型 3D 模块：[`src/scene/cameraPresets.ts`](../src/scene/cameraPresets.ts)，便于页面懒加载 `TwinScene`。
 
@@ -51,7 +61,9 @@ R3F scene (scene/) ← useFrame reads twinEngine.sample*
 
 ## 测试与 CI
 
-- 纯逻辑：`npm test`（Vitest：`layout` / `format` / `liveApi` / `cameraPresets`）
+- 纯逻辑：`npm test`（Vitest：`layout` / `format` / `liveApi` / `cameraPresets` /
+  nav 栈 / `kinematics` / `taskMachine` / `taskHistory` / 联机模式 · jsdom 用
+  `// @vitest-environment jsdom` 按文件启用）
 - CI：`.github/workflows/ci.yml` → `npm ci` + lint + test + build
   - push 仅在 `main` 触发；分支验证走 pull_request 事件（避免 push + PR 双跑计费翻倍）
   - `concurrency` 取消同分支旧 run；`timeout-minutes: 10` 兜底
