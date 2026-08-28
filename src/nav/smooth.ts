@@ -14,15 +14,17 @@ export function cellsToWorld(grid: OccupancyGrid, cells: Cell[]): Vec2[] {
 /**
  * string-pull：从锚点出发贪心跳到最远可视路点，删除中间冗余点。
  * 结果每段均满足 lineOfSight，端点保持不变。
+ * marginNear > 0 时捷径额外避开贴近膨胀边界的格（保持安全余量）；
+ * 相邻原始路点之间的回退步进不受约束，最坏退化为原始路径。
  */
-export function stringPull(grid: OccupancyGrid, points: Vec2[]): Vec2[] {
+export function stringPull(grid: OccupancyGrid, points: Vec2[], marginNear = 0): Vec2[] {
   if (points.length <= 2) return points.slice()
   const out: Vec2[] = [points[0]]
   let anchor = 0
   while (anchor < points.length - 1) {
     let next = anchor + 1
     for (let j = points.length - 1; j > anchor + 1; j--) {
-      if (lineOfSight(grid, points[anchor], points[j])) {
+      if (lineOfSight(grid, points[anchor], points[j], marginNear)) {
         next = j
         break
       }
@@ -76,7 +78,13 @@ export function resample(points: Vec2[], spacing: number): Vec2[] {
   return out
 }
 
+/**
+ * 贴边余量：软代价 ≥ 24 即距膨胀边界不足 1 格的区域，
+ * string-pull 捷径不穿过，避免纯追踪切角时压上禁行边界
+ */
+export const SMOOTH_MARGIN_NEAR = 24
+
 /** A* 格序列 → 平滑等距世界路径（一站式管线） */
 export function smoothPath(grid: OccupancyGrid, cells: Cell[], spacing = 0.12): Vec2[] {
-  return resample(stringPull(grid, cellsToWorld(grid, cells)), spacing)
+  return resample(stringPull(grid, cellsToWorld(grid, cells), SMOOTH_MARGIN_NEAR), spacing)
 }

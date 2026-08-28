@@ -7,7 +7,7 @@
    - 全部候选碰撞 → blocked，由上层决定等待或重规划
    ============================================================ */
 
-import { isBlockedWorld, nearCost } from './grid'
+import { isBlockedWorld } from './grid'
 import { clamp, wrapAngle } from './purePursuit'
 import type { OccupancyGrid, Pose, Twist, Vec2 } from './types'
 
@@ -49,7 +49,7 @@ export const DEFAULT_DWA: DwaParams = {
   desiredWeight: 1.0,
   velocityWeight: 0.35,
   clearanceWeight: 1.2,
-  clearanceCap: 0.9,
+  clearanceCap: 0.35,
 }
 
 /** 圆形障碍（动态行人等），世界坐标 */
@@ -135,16 +135,8 @@ export function dwaSelect(
           collided = true
           break
         }
-        // 静态软代价折算为保守净空
-        const near = nearCost(
-          grid,
-          Math.floor(p.x / grid.cellSize),
-          Math.floor(p.y / grid.cellSize),
-        )
-        if (near > 0) {
-          const staticClear = params.clearanceCap * (1 - near / 44)
-          if (staticClear < minClear) minClear = staticClear
-        }
+        // 净空只统计动态障碍的真实距离；静态几何由禁行格碰撞判定 +
+        // A* 软代价保证，若也计入评分会让“原地不动”永远最优（冻结问题）
         for (const o of obstacles) {
           const d = Math.hypot(o.x - p.x, o.y - p.y) - (o.radius + params.robotRadius)
           if (d <= 0) {

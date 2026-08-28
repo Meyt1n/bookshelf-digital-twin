@@ -39,10 +39,17 @@ const AnalyticsPage = lazy(() =>
 const DevicesPage = lazy(() =>
   import('./components/DevicesPage').then((m) => ({ default: m.DevicesPage })),
 )
+const NavigationPage = lazy(() =>
+  import('./components/NavigationPage').then((m) => ({ default: m.NavigationPage })),
+)
 
 type DrawerId = 'left' | 'right' | null
 
-function PageSkeleton({ variant }: { variant: 'books' | 'analytics' | 'devices' }) {
+function PageSkeleton({
+  variant,
+}: {
+  variant: 'books' | 'analytics' | 'navigation' | 'devices'
+}) {
   return (
     <div className={`page-skeleton sk-${variant}`} role="status" aria-label="页面加载中">
       <div className="sk-banner" />
@@ -424,6 +431,15 @@ export default function App() {
             skeleton={<PageSkeleton variant="analytics" />}
           >
             <AnalyticsRoute />
+          </PageGate>
+        )}
+        {page === 'navigation' && (
+          <PageGate
+            title="配送导航页异常"
+            hint="可重试加载导航页。"
+            skeleton={<PageSkeleton variant="navigation" />}
+          >
+            <NavigationPage />
           </PageGate>
         )}
         {page === 'devices' && (

@@ -136,8 +136,17 @@ export function inflate(grid: OccupancyGrid, radiusM: number): void {
 /**
  * 视线检测：Amanatides-Woo 体素遍历，命中任一禁行格即不可视。
  * 恰好穿过格角时同时检查两侧邻格，避免斜穿缝隙。
+ * marginNear > 0 时软代价 ≥ marginNear 的格也视为遮挡：
+ * 用于路径平滑时与膨胀边界保持安全余量（纯追踪会切内角）。
  */
-export function lineOfSight(grid: OccupancyGrid, a: Vec2, b: Vec2): boolean {
+export function lineOfSight(
+  grid: OccupancyGrid,
+  a: Vec2,
+  b: Vec2,
+  marginNear = 0,
+): boolean {
+  const opaque = (cx: number, cy: number): boolean =>
+    isBlocked(grid, cx, cy) || (marginNear > 0 && nearCost(grid, cx, cy) >= marginNear)
   const inv = 1 / grid.cellSize
   const ax = a.x * inv
   const ay = a.y * inv
@@ -147,7 +156,7 @@ export function lineOfSight(grid: OccupancyGrid, a: Vec2, b: Vec2): boolean {
   let cy = Math.floor(ay)
   const ex = Math.floor(bx)
   const ey = Math.floor(by)
-  if (isBlocked(grid, cx, cy)) return false
+  if (opaque(cx, cy)) return false
 
   const dx = bx - ax
   const dy = by - ay
@@ -170,13 +179,13 @@ export function lineOfSight(grid: OccupancyGrid, a: Vec2, b: Vec2): boolean {
       tMaxY += tDeltaY
     } else {
       // 恰好过角：两侧正交邻格任一被占则视为遮挡
-      if (isBlocked(grid, cx + stepX, cy) || isBlocked(grid, cx, cy + stepY)) return false
+      if (opaque(cx + stepX, cy) || opaque(cx, cy + stepY)) return false
       cx += stepX
       cy += stepY
       tMaxX += tDeltaX
       tMaxY += tDeltaY
     }
-    if (isBlocked(grid, cx, cy)) return false
+    if (opaque(cx, cy)) return false
   }
   return guard > 0
 }

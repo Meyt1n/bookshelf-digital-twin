@@ -4,12 +4,13 @@ import type { LinkState, TwinSnapshot } from '../types'
 import { captureViewportPng, exportKpiJson, recordViewportBrief } from '../ui/exportShare'
 import { cycleTheme, getTheme, type ThemeId } from '../ui/theme'
 
-export type PageId = 'overview' | 'books' | 'analytics' | 'devices'
+export type PageId = 'overview' | 'books' | 'analytics' | 'navigation' | 'devices'
 
 const NAV_ITEMS: Array<{ id: PageId; label: string; icon: string }> = [
   { id: 'overview', label: '孪生总览', icon: '◈' },
   { id: 'books', label: '图书资产', icon: '❒' },
   { id: 'analytics', label: '数据分析', icon: '∿' },
+  { id: 'navigation', label: '配送导航', icon: '⌖' },
   { id: 'devices', label: '设备诊断', icon: '⚙' },
 ]
 
