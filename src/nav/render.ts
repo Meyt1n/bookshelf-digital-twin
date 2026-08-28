@@ -322,5 +322,15 @@ export function renderScene(
       y + Math.sin(state.pose.theta) * r * 1.35,
     )
     ctx.stroke()
+    // 前轮转向指示：前轴处一小段线段，方向 = 航向 + 前轮转角
+    const fx = x + Math.cos(state.pose.theta) * r * 0.62
+    const fy = y + Math.sin(state.pose.theta) * r * 0.62
+    const sa = state.pose.theta + state.steering
+    ctx.strokeStyle = C.lookahead
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(fx - Math.cos(sa) * r * 0.34, fy - Math.sin(sa) * r * 0.34)
+    ctx.lineTo(fx + Math.cos(sa) * r * 0.34, fy + Math.sin(sa) * r * 0.34)
+    ctx.stroke()
   }
 }

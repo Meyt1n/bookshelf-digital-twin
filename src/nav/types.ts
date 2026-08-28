@@ -12,6 +12,9 @@ export type Pose = { x: number; y: number; theta: number }
 /** 速度指令：线速度 v（m/s）+ 角速度 w（rad/s） */
 export type Twist = { v: number; w: number }
 
+/** 阿克曼指令：线速度 v（m/s，负值 = 倒车）+ 前轮转角 delta（弧度，与 θ 增大方向同号） */
+export type AckermannCommand = { v: number; delta: number }
+
 /** 栅格坐标（列 cx，行 cy） */
 export type Cell = { cx: number; cy: number }
 

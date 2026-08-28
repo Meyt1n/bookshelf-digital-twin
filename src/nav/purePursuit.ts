@@ -1,11 +1,14 @@
 /* ============================================================
-   纯追踪（Pure Pursuit）路径跟踪
+   阿克曼纯追踪（Ackermann Pure Pursuit）路径跟踪
    - 自适应前视距离 Ld = min + gain·v，夹紧到 [min, max]
-   - 曲率 κ = 2·y_local / d²，w = κ·v
-   - 目标点在侧后方时原地转向；接近终点线性减速
+   - 曲率 κ = 2·sin(α)/d，前轮转角 δ = atan(κ·L) 夹紧到 δmax
+   - 阿克曼车无法原地转向：目标在侧后方时倒车反打（K-turn），
+     车头逐步扫向目标，滞回阈值防抖
+   - 接近终点线性减速；急弯降速
    坐标系无关：与世界 y 轴方向无耦合
    ============================================================ */
 
+import { MAX_STEER, WHEELBASE, clampSteer, curvatureToSteer } from './ackermann'
 import type { Pose, Vec2 } from './types'
 
 export type PursuitParams = {
@@ -17,12 +20,16 @@ export type PursuitParams = {
   lookaheadGain: number
   /** 最大线速度 m/s */
   maxV: number
-  /** 最大角速度 rad/s */
-  maxW: number
   /** 到点容差（米） */
   goalTolerance: number
   /** 终点减速半径（米） */
   slowRadius: number
+  /** 轴距（米） */
+  wheelbase: number
+  /** 前轮最大转角（弧度） */
+  maxSteer: number
+  /** 倒车调头（K-turn）速度 m/s */
+  reverseV: number
 }
 
 export const DEFAULT_PURSUIT: PursuitParams = {
@@ -30,10 +37,17 @@ export const DEFAULT_PURSUIT: PursuitParams = {
   maxLookahead: 1.15,
   lookaheadGain: 0.85,
   maxV: 1.1,
-  maxW: 2.6,
   goalTolerance: 0.16,
   slowRadius: 0.95,
+  wheelbase: WHEELBASE,
+  maxSteer: MAX_STEER,
+  reverseV: 0.3,
 }
+
+/** 目标偏角超过该值进入倒车调头 */
+const REVERSE_ENTER = Math.PI * 0.62
+/** 倒车中偏角收敛到该值以下才恢复前进（滞回防抖） */
+const REVERSE_EXIT = Math.PI * 0.35
 
 export function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
@@ -99,10 +113,10 @@ export function lookaheadPoint(
 }
 
 export type PursuitCommand = {
-  /** 期望线速度 m/s */
+  /** 期望线速度 m/s（负值 = 倒车调头） */
   v: number
-  /** 期望角速度 rad/s */
-  w: number
+  /** 期望前轮转角（弧度） */
+  delta: number
   /** 前视目标点 */
   target: Vec2
   /** 本次最近点索引（下次作为 fromIndex 传入） */
@@ -111,10 +125,13 @@ export type PursuitCommand = {
   done: boolean
   /** 距终点距离 */
   goalDist: number
+  /** 处于倒车调头（K-turn）段 */
+  reversing: boolean
 }
 
 /**
- * 单步纯追踪。currentV 用于自适应前视，fromIndex 为上次最近点索引。
+ * 单步阿克曼纯追踪。currentV 用于自适应前视与倒车滞回，
+ * fromIndex 为上次最近点索引。
  */
 export function purePursuit(
   path: Vec2[],
@@ -126,7 +143,15 @@ export function purePursuit(
   const goal = path[path.length - 1]
   const goalDist = Math.hypot(goal.x - pose.x, goal.y - pose.y)
   if (path.length < 2 || goalDist <= params.goalTolerance) {
-    return { v: 0, w: 0, target: { ...goal }, nearest: path.length - 1, done: true, goalDist }
+    return {
+      v: 0,
+      delta: 0,
+      target: { ...goal },
+      nearest: path.length - 1,
+      done: true,
+      goalDist,
+      reversing: false,
+    }
   }
 
   const nearest = nearestIndex(path, pose, fromIndex)
@@ -141,30 +166,40 @@ export function purePursuit(
   const dy = target.y - pose.y
   const d = Math.hypot(dx, dy)
   if (d < 1e-6) {
-    return { v: 0, w: 0, target, nearest, done: goalDist <= params.goalTolerance, goalDist }
+    return {
+      v: 0,
+      delta: 0,
+      target,
+      nearest,
+      done: goalDist <= params.goalTolerance,
+      goalDist,
+      reversing: false,
+    }
   }
 
   const alpha = wrapAngle(Math.atan2(dy, dx) - pose.theta)
 
-  // 目标在侧后方：原地转向对准
-  if (Math.abs(alpha) > Math.PI * 0.6) {
+  // 目标在侧后方：倒车反打调头（θ' = v/L·tanδ，v<0 且 δ 与 α 反号 → 车头扫向目标）
+  const wasReversing = currentV < -0.02
+  if (Math.abs(alpha) > REVERSE_ENTER || (wasReversing && Math.abs(alpha) > REVERSE_EXIT)) {
     return {
-      v: 0,
-      w: Math.sign(alpha) * params.maxW,
+      v: -params.reverseV,
+      delta: clampSteer(-Math.sign(alpha) * params.maxSteer, params.maxSteer),
       target,
       nearest,
       done: false,
       goalDist,
+      reversing: true,
     }
   }
 
-  const yLocal = Math.sin(alpha) * d
-  const curvature = (2 * yLocal) / (d * d)
+  // 纯追踪弧曲率（κ = 2·y_local/d² = 2·sinα/d）→ 阿克曼前轮转角
+  const curvature = (2 * Math.sin(alpha)) / d
+  const delta = curvatureToSteer(curvature, params.wheelbase, params.maxSteer)
 
   // 终点减速 + 急弯降速
   let v = params.maxV * clamp(goalDist / params.slowRadius, 0.22, 1)
   v = Math.min(v, params.maxV / (1 + 1.7 * Math.abs(curvature)))
-  const w = clamp(curvature * v, -params.maxW, params.maxW)
 
-  return { v, w, target, nearest, done: false, goalDist }
+  return { v, delta, target, nearest, done: false, goalDist, reversing: false }
 }

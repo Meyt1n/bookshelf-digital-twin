@@ -139,7 +139,7 @@ export function NavigationPage() {
             <h2>
               配送导航<span className="panel-sub">PATH PLANNING</span>
             </h2>
-            <span className="panel-hint">A* 全局规划 · 纯追踪跟踪 · DWA 局部避障</span>
+            <span className="panel-hint">A* 全局规划 · 阿克曼纯追踪 · DWA 局部避障</span>
           </header>
           <div className="navp-canvas-wrap" ref={wrapRef}>
             <canvas
@@ -171,6 +171,9 @@ export function NavigationPage() {
               </span>
               <span className="navp-chip">
                 速度 <b>{ui.speed.toFixed(2)}</b> m/s
+              </span>
+              <span className="navp-chip">
+                转向 <b>{((ui.steering * 180) / Math.PI).toFixed(0)}</b> °
               </span>
               <span className="navp-chip">
                 重规划 <b>{ui.replans}</b> 次

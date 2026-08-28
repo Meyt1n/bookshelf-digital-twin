@@ -6,9 +6,10 @@
    注意：本模块不依赖 src/twin/，可独立运行与测试
    ============================================================ */
 
+import { WHEELBASE, integrateAckermann, steerToOmega } from './ackermann'
 import { findPath } from './astar'
 import type { DwaDecision, DwaObstacle } from './dwa'
-import { DEFAULT_DWA, dwaSelect, integrateTwist, type DwaParams } from './dwa'
+import { DEFAULT_DWA, dwaSelect, type DwaParams } from './dwa'
 import {
   CELL_SIZE,
   WORLD_H,
@@ -59,7 +60,8 @@ export type NavUiSnapshot = {
   pathLen: number
   traveled: number
   speed: number
-  angular: number
+  /** 当前前轮转角（弧度） */
+  steering: number
   replans: number
   simTime: number
   dynEnabled: boolean
@@ -72,6 +74,8 @@ export type NavRenderState = {
   grid: OccupancyGrid
   pose: Pose
   twist: Twist
+  /** 当前前轮转角（弧度），画布用于绘制前轮朝向 */
+  steering: number
   robotRadius: number
   stations: Station[]
   goal: Vec2 | null
@@ -179,6 +183,8 @@ export class NavSimulator {
 
   private pose: Pose
   private twist: Twist = { v: 0, w: 0 }
+  /** 当前前轮转角（弧度） */
+  private steering = 0
   private phase: MissionPhase = 'idle'
   private goal: Vec2 | null = null
   private goalStationId: string | null = null
@@ -260,7 +266,7 @@ export class NavSimulator {
       pathLen: this.pathLen,
       traveled: this.traveled,
       speed: this.twist.v,
-      angular: this.twist.w,
+      steering: this.steering,
       replans: this.replans,
       simTime: this.simTime,
       dynEnabled: this.dynEnabled,
@@ -281,6 +287,7 @@ export class NavSimulator {
       grid: this.grid,
       pose: this.pose,
       twist: this.twist,
+      steering: this.steering,
       robotRadius: ROBOT_RADIUS,
       stations: this.stations,
       goal: this.goal,
@@ -377,6 +384,7 @@ export class NavSimulator {
     const p = cellCenter(this.grid, cell.cx, cell.cy)
     this.pose = { x: p.x, y: p.y, theta: this.pose.theta }
     this.twist = { v: 0, w: 0 }
+    this.steering = 0
     this.clearMission('idle')
     this.trace = []
     this.pushEvent(`小车已放置到 (${p.x.toFixed(1)}, ${p.y.toFixed(1)})`, 'info')
@@ -418,6 +426,7 @@ export class NavSimulator {
     const home = this.stations[0].pos
     this.pose = { x: home.x, y: home.y, theta: -Math.PI / 2 }
     this.twist = { v: 0, w: 0 }
+    this.steering = 0
     this.clearMission('idle')
     this.trace = []
     this.traveled = 0
@@ -585,8 +594,8 @@ export class NavSimulator {
       const decision = dwaSelect(
         this.grid,
         this.pose,
-        this.twist,
-        { v: pursuit.v, w: pursuit.w },
+        { v: this.twist.v, delta: this.steering },
+        { v: pursuit.v, delta: pursuit.delta },
         pursuit.target,
         dwaObstacles,
         { ...this.dwaParams, maxV },
@@ -609,14 +618,14 @@ export class NavSimulator {
           this.notify()
         }
       } else {
-        this.twist = { v: decision.v, w: decision.w }
-        this.pose = integrateTwist(this.pose, decision.v, decision.w, dt)
+        this.steering = decision.delta
+        this.twist = { v: decision.v, w: steerToOmega(decision.v, decision.delta, WHEELBASE) }
+        this.pose = integrateAckermann(this.pose, decision.v, decision.delta, dt)
         this.traveled += Math.abs(decision.v) * dt
 
-        // 停滞看门狗：期望前进但选出的速度趋零（贴着膨胀边界“冻结”），
-        // 按受阻同等处理 → 重规划让路径先离开边界
-        const stalled =
-          Math.abs(decision.v) < 0.02 && pursuit.v > 0.08 && Math.abs(decision.w) < 0.15
+        // 停滞看门狗：期望移动但选出的速度趋零（贴着膨胀边界“冻结”，
+        // 阿克曼车速度趋零即无进展），按受阻同等处理 → 重规划离开边界
+        const stalled = Math.abs(decision.v) < 0.02 && Math.abs(pursuit.v) > 0.08
         if (stalled) {
           this.blockedFor += dt
           this.replanCooldown -= dt

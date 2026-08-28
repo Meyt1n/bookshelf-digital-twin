@@ -1,30 +1,36 @@
 /* ============================================================
-   DWA-lite 动态窗口局部避障
-   - 由加速度极限得到 (v, w) 动态窗口，网格采样
-   - 每条候选恒速前向模拟 horizon 秒，碰撞（静态膨胀格 /
-     动态圆障 / 越界）即弃
+   DWA-lite 动态窗口局部避障（阿克曼版）
+   - 由线加速度极限与前轮打角速率得到 (v, δ) 动态窗口，网格采样；
+     v 允许为负 → 死角处可自发倒车挪位（多点调头）
+   - 每条候选恒定 (v, δ) 沿精确圆弧前向模拟 horizon 秒，
+     碰撞（静态膨胀格 / 动态圆障 / 越界）即弃
    - 评分 = 朝向 + 贴合全局指令 + 速度 + 净空，取最优
    - 全部候选碰撞 → blocked，由上层决定等待或重规划
    ============================================================ */
 
+import { MAX_STEER, WHEELBASE, integrateAckermann } from './ackermann'
 import { isBlockedWorld } from './grid'
 import { clamp, wrapAngle } from './purePursuit'
-import type { OccupancyGrid, Pose, Twist, Vec2 } from './types'
+import type { AckermannCommand, OccupancyGrid, Pose, Vec2 } from './types'
 
 export type DwaParams = {
   maxV: number
+  /** 速度下限（负值 = 允许倒车） */
   minV: number
-  maxW: number
   /** 线加速度极限 m/s² */
   accV: number
-  /** 角加速度极限 rad/s² */
-  accW: number
+  /** 前轮最大转角（弧度） */
+  maxSteer: number
+  /** 前轮打角速率极限 rad/s */
+  steerRate: number
+  /** 轴距（米） */
+  wheelbase: number
   /** 前向模拟步长（秒） */
   simDt: number
   /** 前向模拟时域（秒） */
   horizon: number
   vSamples: number
-  wSamples: number
+  steerSamples: number
   robotRadius: number
   headingWeight: number
   desiredWeight: number
@@ -36,14 +42,15 @@ export type DwaParams = {
 
 export const DEFAULT_DWA: DwaParams = {
   maxV: 1.1,
-  minV: 0,
-  maxW: 2.6,
+  minV: -0.35,
   accV: 1.8,
-  accW: 6.5,
+  maxSteer: MAX_STEER,
+  steerRate: 3.4,
+  wheelbase: WHEELBASE,
   simDt: 0.14,
   horizon: 1.15,
   vSamples: 5,
-  wSamples: 9,
+  steerSamples: 9,
   robotRadius: 0.27,
   headingWeight: 0.85,
   desiredWeight: 1.0,
@@ -57,7 +64,7 @@ export type DwaObstacle = { x: number; y: number; radius: number }
 
 export type DwaTrajectory = {
   v: number
-  w: number
+  delta: number
   score: number
   collided: boolean
   endX: number
@@ -67,7 +74,7 @@ export type DwaTrajectory = {
 
 export type DwaDecision = {
   v: number
-  w: number
+  delta: number
   /** 所有候选均碰撞 */
   blocked: boolean
   best: DwaTrajectory | null
@@ -75,36 +82,19 @@ export type DwaDecision = {
   candidates: DwaTrajectory[]
 }
 
-/** 恒速 (v,w) 单步位姿积分（精确圆弧） */
-export function integrateTwist(pose: Pose, v: number, w: number, dt: number): Pose {
-  if (Math.abs(w) < 1e-6) {
-    return {
-      x: pose.x + v * Math.cos(pose.theta) * dt,
-      y: pose.y + v * Math.sin(pose.theta) * dt,
-      theta: pose.theta,
-    }
-  }
-  const theta = pose.theta + w * dt
-  const r = v / w
-  return {
-    x: pose.x + r * (Math.sin(theta) - Math.sin(pose.theta)),
-    y: pose.y - r * (Math.cos(theta) - Math.cos(pose.theta)),
-    theta,
-  }
-}
-
 /**
- * 选择当前控制周期的安全速度指令。
+ * 选择当前控制周期的安全 (v, δ) 指令。
  * @param grid      占据栅格（膨胀层已含机器人半径，质点检查即可）
- * @param desired   全局路径跟踪给出的期望速度（纯追踪输出）
+ * @param current   当前 (v, δ)（动态窗口中心）
+ * @param desired   全局路径跟踪给出的期望指令（阿克曼纯追踪输出）
  * @param target    前视目标点（朝向评分参考）
  * @param controlDt 控制周期（秒），决定动态窗口宽度
  */
 export function dwaSelect(
   grid: OccupancyGrid,
   pose: Pose,
-  current: Twist,
-  desired: Twist,
+  current: AckermannCommand,
+  desired: AckermannCommand,
   target: Vec2,
   obstacles: DwaObstacle[],
   params: DwaParams = DEFAULT_DWA,
@@ -112,8 +102,8 @@ export function dwaSelect(
 ): DwaDecision {
   const vLo = Math.max(params.minV, current.v - params.accV * controlDt)
   const vHi = Math.min(params.maxV, current.v + params.accV * controlDt)
-  const wLo = Math.max(-params.maxW, current.w - params.accW * controlDt)
-  const wHi = Math.min(params.maxW, current.w + params.accW * controlDt)
+  const dLo = Math.max(-params.maxSteer, current.delta - params.steerRate * controlDt)
+  const dHi = Math.min(params.maxSteer, current.delta + params.steerRate * controlDt)
 
   const steps = Math.max(2, Math.round(params.horizon / params.simDt))
   const candidates: DwaTrajectory[] = []
@@ -122,15 +112,17 @@ export function dwaSelect(
   for (let iv = 0; iv < params.vSamples; iv++) {
     const v =
       params.vSamples === 1 ? vLo : vLo + ((vHi - vLo) * iv) / (params.vSamples - 1)
-    for (let iw = 0; iw < params.wSamples; iw++) {
-      const w =
-        params.wSamples === 1 ? wLo : wLo + ((wHi - wLo) * iw) / (params.wSamples - 1)
+    for (let id = 0; id < params.steerSamples; id++) {
+      const delta =
+        params.steerSamples === 1
+          ? dLo
+          : dLo + ((dHi - dLo) * id) / (params.steerSamples - 1)
 
       let p: Pose = pose
       let collided = false
       let minClear = params.clearanceCap
       for (let s = 0; s < steps; s++) {
-        p = integrateTwist(p, v, w, params.simDt)
+        p = integrateAckermann(p, v, delta, params.simDt, params.wheelbase)
         if (isBlockedWorld(grid, p.x, p.y)) {
           collided = true
           break
@@ -150,7 +142,7 @@ export function dwaSelect(
 
       const traj: DwaTrajectory = {
         v,
-        w,
+        delta,
         score: -Infinity,
         collided,
         endX: p.x,
@@ -165,8 +157,9 @@ export function dwaSelect(
         const desiredScore =
           1 -
           (Math.abs(v - desired.v) / Math.max(0.01, params.maxV) +
-            Math.abs(w - desired.w) / Math.max(0.01, 2 * params.maxW)) /
+            Math.abs(delta - desired.delta) / Math.max(0.01, 2 * params.maxSteer)) /
             2
+        // 倒车得负速度分：只有前进候选全部碰撞时才选择倒车挪位
         const velocity = params.maxV > 0 ? v / params.maxV : 0
         const clearance = clamp(minClear / params.clearanceCap, 0, 1)
         traj.score =
@@ -181,7 +174,7 @@ export function dwaSelect(
   }
 
   if (best === null) {
-    return { v: 0, w: 0, blocked: true, best: null, candidates }
+    return { v: 0, delta: current.delta, blocked: true, best: null, candidates }
   }
-  return { v: best.v, w: best.w, blocked: false, best, candidates }
+  return { v: best.v, delta: best.delta, blocked: false, best, candidates }
 }
