@@ -11,6 +11,11 @@ R3F scene (scene/) ← useFrame reads twinEngine.sample*
 ```
 
 - **不要大改** `TwinEngine` 任务状态机与 `sample*` 运动编排；仿真已较完善。前端优化优先走分包、加载态、ErrorBoundary、selector。
+- `sample*` 运动学采样已抽取为纯函数模块 [`src/twin/kinematics.ts`](../src/twin/kinematics.ts)
+  （状态由引擎作为参数传入，行为与抽取前一致）；`TwinEngine.sample*` 是薄委托，
+  公共 API 不变。相位常量（`PHASE_MS` / `PHASE_LABELS` / `taskFlow` /
+  `taskPhaseProgress`）同在该模块，引擎原样再导出。纯函数可在 node 测试环境
+  直接验证相位边界（`src/twin/__tests__/kinematics.test.ts`）。
 - 联机边界校验放在 [`src/twin/liveApi.ts`](../src/twin/liveApi.ts)，引擎只消费校验后的数据。
 - 相机预设独立于重型 3D 模块：[`src/scene/cameraPresets.ts`](../src/scene/cameraPresets.ts)，便于页面懒加载 `TwinScene`。
 
