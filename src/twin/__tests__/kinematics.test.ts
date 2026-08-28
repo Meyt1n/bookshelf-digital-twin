@@ -4,7 +4,7 @@ import {
   CART_HOME,
   GANTRY_CARRY_SWING,
   GANTRY_SWING_IDLE,
-  BAY_REAR_Z,
+  BAY_ENTRY_REAR_Z,
   bayHeldBookWorld,
   robotHeldBookWorld,
 } from '../../scene/layout'
@@ -165,14 +165,14 @@ describe('sampleCart · 小车位姿', () => {
 })
 
 describe('sampleBookFlight · 机构间过渡', () => {
-  it('存书 deliver 中段：书在机器人爪与大隔间后沿之间飞行', () => {
+  it('存书 deliver 中段：书在机器人爪与大隔间柜后入口之间飞行', () => {
     const flight = sampleBookFlight(mkTask('store', 'deliver', 0.48), NOW)
     expect(flight.active).toBe(true)
     expect(flight.bookId).toBe(7)
     expect(flight.t).toBeGreaterThan(0)
     expect(flight.t).toBeLessThan(1)
     const from = robotHeldBookWorld(1)
-    const to = bayHeldBookWorld(BAY_REAR_Z)
+    const to = bayHeldBookWorld(BAY_ENTRY_REAR_Z)
     const lo = Math.min(from.z, to.z)
     const hi = Math.max(from.z, to.z)
     expect(flight.z).toBeGreaterThanOrEqual(lo)
@@ -187,19 +187,50 @@ describe('sampleBookFlight · 机构间过渡', () => {
 })
 
 describe('sampleBay · 大隔间夹板', () => {
+  it('deliver 末段：刚落柜后入口，倾斜扶正夹紧，不深送', () => {
+    const early = sampleBay(mkTask('store', 'deliver', 0.65), NOW)
+    expect(early.bookLocalZ).toBeCloseTo(BAY_ENTRY_REAR_Z, 5)
+    expect(early.bookTilt).toBeGreaterThan(0)
+    expect(early.belt).toBe(0)
+    const late = sampleBay(mkTask('store', 'deliver', 0.95), NOW)
+    expect(late.clamp).toBeGreaterThan(0.8)
+    expect(late.bookTilt).toBeLessThan(0.1)
+  })
+
   it('scan 相位夹板全紧，闪光只出现在 0.12–0.28 窗口', () => {
     const flashing = sampleBay(mkTask('store', 'scan', 0.2), NOW)
     expect(flashing.clamp).toBe(1)
     expect(flashing.bookVisible).toBe(true)
+    expect(flashing.bookTilt).toBe(0)
     expect(flashing.scanFlash).toBeGreaterThan(0)
     const still = sampleBay(mkTask('store', 'scan', 0.5), NOW)
     expect(still.scanFlash).toBe(0)
+  })
+
+  it('存书 handoff：送书过程保持夹紧，交夹爪时才松开', () => {
+    const moving = sampleBay(mkTask('store', 'handoff', 0.3), NOW)
+    expect(moving.clamp).toBe(1)
+    expect(moving.belt).toBe(1)
+    const handing = sampleBay(mkTask('store', 'handoff', 0.55), NOW)
+    expect(handing.clamp).toBeLessThan(1)
+  })
+
+  it('取书 handoff：入口扶正后夹住送柜后，交机器人时松开', () => {
+    const upright = sampleBay(mkTask('take', 'handoff', 0.45), NOW)
+    expect(upright.bookVisible).toBe(true)
+    expect(upright.clamp).toBeGreaterThan(0.5)
+    const haul = sampleBay(mkTask('take', 'handoff', 0.65), NOW)
+    expect(haul.clamp).toBe(1)
+    expect(haul.belt).toBe(-1)
+    const release = sampleBay(mkTask('take', 'handoff', 0.85), NOW)
+    expect(release.clamp).toBeLessThan(1)
   })
 
   it('无任务时回到待机间隙', () => {
     const idle = sampleBay(null, NOW)
     expect(idle.clamp).toBeCloseTo(0.08, 5)
     expect(idle.bookVisible).toBe(false)
+    expect(idle.bookTilt).toBe(0)
   })
 })
 

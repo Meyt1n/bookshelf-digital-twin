@@ -66,6 +66,7 @@ export function TransferBay() {
     if (bookRef.current) {
       bookRef.current.visible = pose.bookVisible
       bookRef.current.position.z = pose.bookLocalZ
+      bookRef.current.rotation.x = pose.bookTilt
     }
     if (pose.bookVisible && pose.bookId !== null && pose.bookId !== lastBookId.current) {
       lastBookId.current = pose.bookId

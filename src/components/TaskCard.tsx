@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { PHASE_LABELS, taskFlow } from '../twin/engine'
 import { selectTaskCard, taskCardEqual } from '../twin/selectors'
 import { useTwinSelector } from '../twin/useTwin'
@@ -5,6 +6,20 @@ import { useTwinSelector } from '../twin/useTwin'
 /** 横向相位时间轴 HUD（替代密集相位点） */
 export function TaskCard() {
   const { task, ocr, ocrTitle } = useTwinSelector(selectTaskCard, taskCardEqual)
+  const timelineRef = useRef<HTMLOListElement>(null)
+  const activeRef = useRef<HTMLLIElement>(null)
+
+  const activeIdx = task ? taskFlow(task.action).indexOf(task.phase) : -1
+
+  useEffect(() => {
+    const rail = timelineRef.current
+    const active = activeRef.current
+    if (!rail || !active) return
+    const target =
+      active.offsetLeft - (rail.clientWidth - active.offsetWidth) / 2
+    rail.scrollTo({ left: Math.max(0, target), behavior: 'smooth' })
+  }, [activeIdx, task?.id, task?.phase])
+
   if (!task && !ocr) return null
 
   const ocrTotal = ocr?.stages.length ?? 0
@@ -35,7 +50,6 @@ export function TaskCard() {
   if (!task) return null
   const isFault = task.phase === 'fault'
   const flow = taskFlow(task.action)
-  const activeIdx = flow.indexOf(task.phase)
   const pct = isFault ? 100 : task.phase === 'done' ? 100 : ((Math.max(activeIdx, 0) + 0.45) / flow.length) * 100
 
   return (
@@ -50,14 +64,19 @@ export function TaskCard() {
         <span className="phase-now-label">{isFault ? '状态' : '当前阶段'}</span>
         <strong>{PHASE_LABELS[task.phase] ?? task.phase}</strong>
       </div>
-      <ol className="phase-timeline" aria-label="作业相位时间轴">
+      <ol ref={timelineRef} className="phase-timeline" aria-label="作业相位时间轴">
         {flow.map((phase, i) => {
           let cls = 'timeline-step'
           if (isFault) cls += ' fault'
           else if (i < activeIdx || task.phase === 'done') cls += ' done'
           else if (i === activeIdx) cls += ' active'
           return (
-            <li key={phase} className={cls} title={PHASE_LABELS[phase]}>
+            <li
+              key={phase}
+              ref={i === activeIdx ? activeRef : undefined}
+              className={cls}
+              title={PHASE_LABELS[phase]}
+            >
               <i />
               <span>{PHASE_LABELS[phase] ?? phase}</span>
             </li>

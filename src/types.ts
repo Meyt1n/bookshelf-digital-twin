@@ -216,6 +216,7 @@ export type GantryPose = {
 
 /** 第二层最左侧大隔间：弹簧夹板夹紧 + 底部履带交书 */
 export type BayPose = {
+  /** 0…1：夹板合拢量（1=夹紧直立） */
   clamp: number
   bookVisible: boolean
   bookId: number | null
@@ -223,6 +224,8 @@ export type BayPose = {
   belt: number
   /** 识别闪光 0…1 */
   scanFlash: number
+  /** 书绕 X 倾角（弧度）：入隔间时略倾，夹板合拢扶正为 0 */
+  bookTilt: number
 }
 
 export type CartPose = {

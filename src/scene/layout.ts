@@ -130,6 +130,14 @@ export const BAY_PARK_Z = -SLOT_DEPTH * 0.28
 export const BAY_MOUTH_Z = SLOT_DEPTH / 2
 /** 大隔间后沿：小车从柜后直着送入 */
 export const BAY_REAR_Z = -SLOT_DEPTH * 0.48
+/**
+ * 交接落点：刚进隔间口即可，不要一次送太深。
+ * 后续由履带在夹板夹住后把书送到对面夹爪。
+ */
+export const BAY_ENTRY_REAR_Z = -SLOT_DEPTH * 0.4
+export const BAY_ENTRY_FRONT_Z = SLOT_DEPTH * 0.38
+/** 刚入隔间时书的倾角（绕 X，正=向柜后仰倒一点） */
+export const BAY_ENTRY_TILT = 0.42
 
 /** 大隔间上方识别摄像头（下层隔间顶板下沿，朝下拍书） */
 export const BAY_CAM = {

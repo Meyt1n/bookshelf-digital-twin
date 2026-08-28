@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * Offline GLB optimize with Meshopt compression (runtime via MeshoptGLTFLoader).
+ * Offline GLB optimize with Meshopt compression.
+ *
+ * 警告：书柜场景依赖 CAD 坐标做夹板拆分 / 掏空 / 分件动画。
+ * 默认 join + simplify 会破坏 bookcase-* 与 delivery-robot，请勿对这四个文件盲目跑本脚本。
+ * 若必须压缩：--join false --simplify false，且运行时需烘焙节点矩阵（见 docs/GLB_PIPELINE.md）。
  */
 import { execFileSync } from 'node:child_process'
 import { readdirSync, statSync } from 'node:fs'
@@ -18,7 +22,20 @@ for (const file of files) {
   const before = statSync(input).size
   execFileSync(
     'npx',
-    ['gltf-transform', 'optimize', input, input, '--compress', 'meshopt', '--texture-compress', 'false'],
+    [
+      'gltf-transform',
+      'optimize',
+      input,
+      input,
+      '--compress',
+      'meshopt',
+      '--texture-compress',
+      'false',
+      '--join',
+      'false',
+      '--simplify',
+      'false',
+    ],
     { stdio: 'inherit' },
   )
   const after = statSync(input).size
